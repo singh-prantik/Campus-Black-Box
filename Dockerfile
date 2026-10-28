@@ -7,7 +7,8 @@ WORKDIR /app
 COPY package.json ./
 COPY server.js ./
 COPY public ./public
-COPY uploads ./uploads
+# Ensure uploads directory exists
+RUN mkdir -p uploads
 
 # Configuration defaults
 ENV PORT=3000
