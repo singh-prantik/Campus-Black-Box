@@ -9,12 +9,13 @@ import {
   useCallback,
 } from "react";
 import { User, UserRole } from "@/types";
-import { apiLogin, apiGetMe } from "./api";
+import { apiLogin, apiRegister, apiGetMe } from "./api";
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
   login: (email: string, password?: string) => Promise<User>;
+  register: (name: string, email: string, password?: string, role?: string) => Promise<User>;
   logout: () => void;
   loading: boolean;
   isAuthenticated: boolean;
@@ -24,6 +25,7 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   token: null,
   login: async () => { throw new Error("AuthProvider not ready"); },
+  register: async () => { throw new Error("AuthProvider not ready"); },
   logout: () => {},
   loading: true,
   isAuthenticated: false,
@@ -84,6 +86,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const register = useCallback(
+    async (name: string, email: string, password?: string, role: string = "student"): Promise<User> => {
+      setLoading(true);
+      try {
+        const res = await apiRegister(name, email, password, role);
+        localStorage.setItem("token", res.access_token);
+        localStorage.setItem("cbb_user", JSON.stringify(res.user));
+        setToken(res.access_token);
+        setUser(res.user);
+        return res.user;
+      } finally {
+        setLoading(false);
+      }
+    },
+    []
+  );
+
   const logout = useCallback(() => {
     localStorage.removeItem("token");
     localStorage.removeItem("cbb_user");
@@ -100,6 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         token,
         login,
+        register,
         logout,
         loading,
         isAuthenticated: !!user && !!token,

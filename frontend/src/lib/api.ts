@@ -74,6 +74,22 @@ export async function apiLogin(email: string, password?: string): Promise<AuthRe
   });
 }
 
+export async function apiRegister(
+  name: string,
+  email: string,
+  password?: string,
+  role?: string
+): Promise<AuthResponse> {
+  try {
+    return await apiFetch<AuthResponse>("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ name, email, password: password || "DemoPass123!", role: role || "student" }),
+    });
+  } catch {
+    return await apiLogin(email, password);
+  }
+}
+
 export async function apiStaffLogin(email: string, password?: string): Promise<AuthResponse> {
   return await apiFetch<AuthResponse>("/api/staff/auth/login", {
     method: "POST",
