@@ -1,0 +1,200 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #FFFFFF;
+  --surface: #F7F7F8;
+  --border: #E5E7EB;
+  --text: #0F1115;
+  --muted: #5B6270;
+  --accent: #2F5BFF;
+  --accent-hover: #1E45DB;
+
+  /* Status Colors (Light Theme: > 4.5:1 contrast) */
+  --status-pending-bg: #FEF3C7;
+  --status-pending-text: #78350F;
+  --status-pending-border: #FCD34D;
+
+  --status-assigned-bg: #EFF6FF;
+  --status-assigned-text: #1E3A8A;
+  --status-assigned-border: #BFDBFE;
+
+  --status-in_progress-bg: #F5F3FF;
+  --status-in_progress-text: #4C1D95;
+  --status-in_progress-border: #DDD6FE;
+
+  --status-resolved-bg: #ECFDF5;
+  --status-resolved-text: #064E3B;
+  --status-resolved-border: #A7F3D0;
+
+  /* Priority Colors (Light Theme) */
+  --prio-critical-bg: #FEF2F2;
+  --prio-critical-text: #991B1B;
+  --prio-critical-border: #FECACA;
+
+  --prio-high-bg: #FFFBEB;
+  --prio-high-text: #92400E;
+  --prio-high-border: #FDE68A;
+
+  --prio-medium-bg: #EFF6FF;
+  --prio-medium-text: #1E40AF;
+  --prio-medium-border: #BFDBFE;
+
+  --prio-low-bg: #F3F4F6;
+  --prio-low-text: #374151;
+  --prio-low-border: #E5E7EB;
+}
+
+[data-theme="dark"] {
+  --bg: #0B0C0E;
+  --surface: #141518;
+  --border: #26282D;
+  --text: #F2F3F5;
+  --muted: #9AA0AB;
+  --accent: #6D8CFF;
+  --accent-hover: #8BA5FF;
+
+  /* Status Colors (Dark Theme: > 4.5:1 contrast) */
+  --status-pending-bg: #261B07;
+  --status-pending-text: #FDE68A;
+  --status-pending-border: #523F16;
+
+  --status-assigned-bg: #0F172A;
+  --status-assigned-text: #93C5FD;
+  --status-assigned-border: #1E3A8A;
+
+  --status-in_progress-bg: #1A102E;
+  --status-in_progress-text: #C4B5FD;
+  --status-in_progress-border: #4C1D95;
+
+  --status-resolved-bg: #071F14;
+  --status-resolved-text: #6EE7B7;
+  --status-resolved-border: #065F46;
+
+  /* Priority Colors (Dark Theme) */
+  --prio-critical-bg: #270D10;
+  --prio-critical-text: #FCA5A5;
+  --prio-critical-border: #7F1D1D;
+
+  --prio-high-bg: #261B07;
+  --prio-high-text: #FDE68A;
+  --prio-high-border: #523F16;
+
+  --prio-medium-bg: #0F172A;
+  --prio-medium-text: #93C5FD;
+  --prio-medium-border: #1E3A8A;
+
+  --prio-low-bg: #18191E;
+  --prio-low-text: #D1D5DB;
+  --prio-low-border: #2B2F38;
+}
+
+/* 200ms Color Cross-Fade */
+* {
+  box-sizing: border-box;
+  transition: background-color 200ms ease, border-color 200ms ease, color 200ms ease;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+/* 2px Visible Focus Ring */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Smooth 60fps Animations (Transform and Opacity only) */
+@keyframes cardEnter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-card-enter {
+  animation: cardEnter 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes dropdownSlide {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-dropdown {
+  animation: dropdownSlide 160ms ease-out forwards;
+}
+
+@keyframes skeletonPulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.animate-skeleton {
+  animation: skeletonPulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Chip Select Press */
+.chip-press {
+  transition: transform 150ms ease, background-color 150ms ease, border-color 150ms ease;
+}
+.chip-press:active {
+  transform: scale(0.97);
+}
+
+/* Theme Icon Rotate */
+.theme-icon-rotate {
+  transition: transform 200ms ease;
+}
+.theme-icon-rotate:hover {
+  transform: rotate(90deg);
+}
+
+/* Respect prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

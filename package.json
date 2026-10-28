@@ -1,0 +1,14 @@
+{
+  "name": "campus-black-box-server",
+  "version": "1.0.0",
+  "description": "AI-Powered Campus Problem Intelligence and Resolution System",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test_workflow.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
+

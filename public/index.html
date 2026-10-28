@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Campus Black Box — Student &amp; Faculty Reporting</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+  <!-- HEADER -->
+  <header class="site-header">
+    <div class="header-inner">
+      <div class="brand">
+        <a href="/report" class="brand-link" onclick="navigateRoute(event, '/report')">
+          <span class="brand-logo">■</span>
+          <span class="brand-name">Campus Black Box</span>
+        </a>
+      </div>
+
+      <!-- Public Navigation Tabs -->
+      <nav class="nav-tabs">
+        <button id="nav-btn-report" class="nav-tab active" onclick="navigateRoute(event, '/report')">
+          <i data-lucide="plus-circle" style="width: 15px; height: 15px; margin-right: 6px;"></i> Report Incident
+        </button>
+        <button id="nav-btn-myreports" class="nav-tab" onclick="navigateRoute(event, '/my-reports')">
+          <i data-lucide="clock" style="width: 15px; height: 15px; margin-right: 6px;"></i> My Reports
+        </button>
+      </nav>
+
+      <div class="header-controls">
+        <!-- In-App Notification Bell (Hidden when signed out) -->
+        <div id="notification-bell-container" style="position: relative; display: none;">
+          <button id="notification-bell-btn" class="theme-toggle" onclick="toggleNotificationsPanel()" title="Notifications" aria-label="Notifications">
+            <i data-lucide="bell" style="width: 16px; height: 16px;"></i>
+            <span id="unread-notifications-badge" style="display: none; position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; background: #EF4444; border-radius: 50%;"></span>
+          </button>
+
+          <!-- Notifications Dropdown -->
+          <div id="notifications-dropdown" style="display: none; position: absolute; right: 0; top: 42px; width: 320px; background: var(--bg); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); z-index: 1000; padding: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
+              <span style="font-weight: 700; font-size: 13px;">Notifications</span>
+              <button class="btn btn-secondary btn-sm" style="font-size: 10px; padding: 2px 6px;" onclick="markAllNotificationsRead()">Mark read</button>
+            </div>
+            <div id="notifications-list" style="max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;">
+              <div style="font-size: 12px; color: var(--muted); text-align: center; padding: 16px;">No notifications</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Theme Toggle -->
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle Theme" aria-label="Toggle Theme">
+          <i data-lucide="sun" id="theme-icon-sun" style="width: 16px; height: 16px;"></i>
+          <i data-lucide="moon" id="theme-icon-moon" style="width: 16px; height: 16px; display: none;"></i>
+        </button>
+
+        <!-- Reporter Auth / Profile -->
+        <div id="reporter-auth-container">
+          <div id="reporter-profile-badge" style="display: none; align-items: center; gap: 8px;">
+            <span id="reporter-role-tag" class="chip" style="font-size: 11px; text-transform: capitalize; background: var(--surface);">Student</span>
+            <button class="btn btn-secondary btn-sm" onclick="handleReporterLogout()">Sign Out</button>
+          </div>
+          <button id="reporter-signin-nav-btn" class="btn btn-primary btn-sm" onclick="openReporterLoginModal()">Sign In</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN CONTAINER -->
+  <main class="container" style="padding-top: 28px; padding-bottom: 60px; min-height: 75vh;">
+
+    <!-- ========================================================= -->
+    <!-- VIEW 1: REPORT INCIDENT (/report & /r/:token)              -->
+    <!-- ========================================================= -->
+    <section id="view-report" class="page-view active">
+
+      <!-- Signed-out Guard: Form NOT rendered when signed out -->
+      <div id="report-signedout-card" style="display: none; max-width: 520px; margin: 40px auto; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 36px 28px; text-align: center;">
+        <div style="display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 12px; background: var(--bg); border: 1px solid var(--border); margin-bottom: 16px;">
+          <i data-lucide="lock" style="width: 24px; height: 24px; color: var(--accent);"></i>
+        </div>
+        <h2 style="font-size: 18px; font-weight: 700; margin-bottom: 6px;">Authentication Required</h2>
+        <p style="font-size: 13px; color: var(--muted); margin-bottom: 16px;">
+          Sign in with your Student or Faculty account to report campus infrastructure issues.
+        </p>
+
+        <!-- Location Badge for Scanned QR Links -->
+        <div id="qr-scanned-preview-badge" style="display: none; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin-bottom: 20px; text-align: left;">
+          <div style="font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase;">Verified QR Location</div>
+          <div id="qr-preview-location-text" style="font-size: 14px; font-weight: 700; margin-top: 2px;">Block 3 · Room 302</div>
+        </div>
+
+        <button class="btn btn-primary" style="width: 100%; justify-content: center; height: 42px;" onclick="openReporterLoginModal()">Sign In to Report</button>
+      </div>
+
+      <!-- Signed-in Report Form -->
+      <div id="report-authenticated-container" style="display: none; max-width: 640px; margin: 0 auto;">
+        
+        <!-- Submission Success Screen -->
+        <div id="report-success-screen" style="display: none; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 36px 24px; text-align: center;">
+          <div style="display: inline-flex; align-items: center; justify-content: center; width: 52px; height: 52px; border-radius: 50%; background: #ECFDF5; border: 1px solid #A7F3D0; margin-bottom: 16px;">
+            <i data-lucide="check" style="width: 28px; height: 28px; color: #065F46;"></i>
+          </div>
+          <h2 style="font-size: 20px; font-weight: 700;">Incident Successfully Reported</h2>
+          <p style="font-size: 13px; color: var(--muted); margin-top: 6px; margin-bottom: 20px;">
+            Your report <strong id="success-report-id">#</strong> has been queued for facility review. You will receive live status notifications as maintenance progresses.
+          </p>
+          <div style="display: flex; gap: 10px; justify-content: center;">
+            <button class="btn btn-primary" onclick="navigateRoute(null, '/my-reports')">Track in My Reports</button>
+            <button class="btn btn-secondary" onclick="resetReportForm()">Submit Another Issue</button>
+          </div>
+        </div>
+
+        <!-- Form Card -->
+        <div id="report-form-card" style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 28px;">
+          <div style="margin-bottom: 20px;">
+            <h1 style="font-size: 20px; font-weight: 700;">Report Campus Issue</h1>
+            <p style="font-size: 13px; color: var(--muted); margin-top: 4px;">Submit a facility or equipment fault for maintenance response.</p>
+          </div>
+
+          <!-- Location Badge / Selection -->
+          <div class="form-group" style="margin-bottom: 18px;">
+            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px;">Campus Location <span style="color: #EF4444;">*</span></label>
+            
+            <div id="qr-locked-location" style="display: none; align-items: center; justify-content: space-between; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px;">
+              <div>
+                <span class="chip" style="font-size: 10px; background: #ECFDF5; color: #064E3B; border-color: #A7F3D0; margin-right: 6px;">VERIFIED QR CODE</span>
+                <strong id="qr-locked-location-text" style="font-size: 13px;">Block 3 · Room 302</strong>
+              </div>
+              <i data-lucide="check-circle" style="width: 16px; height: 16px; color: #10B981;"></i>
+            </div>
+
+            <div id="manual-location-select-wrap">
+              <select id="report-location-select" class="form-select" style="width: 100%;" onchange="handleLocationChange()">
+                <option value="">Select building room or area...</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Description (Max 1000 characters) -->
+          <div class="form-group" style="margin-bottom: 18px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <label style="font-size: 12px; font-weight: 600;">Issue Description <span style="color: #EF4444;">*</span></label>
+              <span id="desc-char-counter" style="font-size: 11px; color: var(--muted);">0 / 1000</span>
+            </div>
+            <textarea id="report-description" required class="form-input" rows="4" maxlength="1000" placeholder="Provide specific details about the issue (e.g. Projector bulb blinking red and not powering on in Room 302)..." style="width: 100%; resize: vertical;" oninput="handleDescriptionChange()"></textarea>
+          </div>
+
+          <!-- Truthful AI Category Intelligence Panel (PRD Honesty Rule) -->
+          <div id="ai-suggestion-box" style="background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 18px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+              <div style="display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--accent);">
+                <i data-lucide="sparkles" style="width: 14px; height: 14px;"></i> AI Categorization Assistant
+              </div>
+              <span id="ai-model-tag" style="font-size: 10px; color: var(--muted);">v1.1-rules-tfidf</span>
+            </div>
+            <div id="ai-suggestion-status" style="font-size: 12px; color: var(--muted);">
+              Type at least 15 characters describing the issue for automated classification assistance.
+            </div>
+            <div id="ai-suggestion-action" style="display: none; margin-top: 8px;">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="applyAiSuggestion()">
+                Apply <strong id="ai-suggested-name" style="margin-left: 4px;">Electrical</strong>
+              </button>
+            </div>
+          </div>
+
+          <!-- Duplicate Detection Warning Box (FR-20, AC6.2) -->
+          <div id="duplicate-warning-box" style="display: none; background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 10px; padding: 14px; margin-bottom: 18px;">
+            <div style="display: flex; align-items: flex-start; gap: 10px;">
+              <i data-lucide="alert-triangle" style="width: 18px; height: 18px; color: #D97706; flex-shrink: 0; margin-top: 2px;"></i>
+              <div style="flex: 1;">
+                <div style="font-size: 13px; font-weight: 700; color: #92400E; margin-bottom: 4px;">Potential Duplicate Issue Detected</div>
+                <p id="duplicate-warning-text" style="font-size: 12px; color: #78350F; line-height: 1.4; margin-bottom: 10px;">
+                  A similar issue was recently reported in this location.
+                </p>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                  <button type="button" class="btn btn-primary btn-sm" id="btn-add-details-to-dup" onclick="handleAddDetailsToDuplicate()">Add my details to it</button>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="dismissDuplicateWarning()">This is a different problem</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Category Chips -->
+          <div class="form-group" style="margin-bottom: 18px;">
+            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 8px;">Select Category <span style="color: #EF4444;">*</span></label>
+            <div id="category-chips-group" style="display: flex; flex-wrap: wrap; gap: 8px;">
+              <button type="button" class="chip-btn" data-category="Electrical" onclick="selectCategory('Electrical')">Electrical</button>
+              <button type="button" class="chip-btn" data-category="IT/Wi-Fi" onclick="selectCategory('IT/Wi-Fi')">IT/Wi-Fi</button>
+              <button type="button" class="chip-btn" data-category="Equipment" onclick="selectCategory('Equipment')">Equipment</button>
+              <button type="button" class="chip-btn" data-category="Water" onclick="selectCategory('Water')">Water</button>
+              <button type="button" class="chip-btn" data-category="Cleanliness" onclick="selectCategory('Cleanliness')">Cleanliness</button>
+              <button type="button" class="chip-btn" data-category="Furniture" onclick="selectCategory('Furniture')">Furniture</button>
+              <button type="button" class="chip-btn" data-category="Safety" onclick="selectCategory('Safety')">Safety</button>
+              <button type="button" class="chip-btn" data-category="Accessibility" onclick="selectCategory('Accessibility')">Accessibility</button>
+            </div>
+          </div>
+
+          <!-- Real Photo Upload (Base64 JSON, Magic bytes, max 5MB) -->
+          <div class="form-group" style="margin-bottom: 22px;">
+            <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px;">Attach Photo (Optional, Max 5MB)</label>
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <input type="file" id="report-photo-input" accept="image/png,image/jpeg,image/webp" style="font-size: 12px;" onchange="handlePhotoSelection(event)">
+              <button type="button" id="photo-clear-btn" class="btn btn-secondary btn-sm" style="display: none;" onclick="clearSelectedPhoto()">Remove</button>
+            </div>
+            <div id="photo-preview-wrap" style="display: none; margin-top: 10px;">
+              <img id="photo-preview-img" src="" alt="Selected photo preview" style="max-height: 140px; border-radius: 8px; border: 1px solid var(--border);">
+            </div>
+            <div id="photo-error-msg" style="display: none; font-size: 12px; color: #EF4444; margin-top: 4px;"></div>
+          </div>
+
+          <!-- Legal Consent Line -->
+          <div style="font-size: 12px; color: var(--muted); margin-bottom: 18px; line-height: 1.4;">
+            By submitting this report, you agree to the 
+            <a href="/terms" onclick="navigateRoute(event, '/terms')" style="color: var(--accent); text-decoration: underline;">Terms &amp; Conditions</a> 
+            and 
+            <a href="/privacy" onclick="navigateRoute(event, '/privacy')" style="color: var(--accent); text-decoration: underline;">Privacy Policy</a>.
+          </div>
+
+          <div id="report-form-error" style="display: none; padding: 10px 14px; background: var(--prio-critical-bg); color: var(--prio-critical-text); border: 1px solid var(--prio-critical-border); border-radius: 8px; font-size: 13px; margin-bottom: 16px;"></div>
+
+          <button type="button" id="submit-report-btn" class="btn btn-primary" style="width: 100%; justify-content: center; height: 44px; font-weight: 600;" onclick="submitReportForm()">
+            Submit Incident Report
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================================================= -->
+    <!-- VIEW 2: MY REPORTS (/my-reports & /my-reports/:id)         -->
+    <!-- ========================================================= -->
+    <section id="view-myreports" class="page-view" style="display: none;">
+      <div style="max-width: 800px; margin: 0 auto;">
+        
+        <!-- Signed-out Guard for My Reports -->
+        <div id="myreports-signedout-card" style="display: none; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 36px 24px; text-align: center;">
+          <h2 style="font-size: 18px; font-weight: 700;">Sign in to view your reports</h2>
+          <p style="font-size: 13px; color: var(--muted); margin-top: 6px; margin-bottom: 16px;">Access real-time status updates and resolution history for your submitted issues.</p>
+          <button class="btn btn-primary" onclick="openReporterLoginModal()">Sign In</button>
+        </div>
+
+        <div id="myreports-content" style="display: none;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div>
+              <h1 style="font-size: 20px; font-weight: 700;">My Incident Reports</h1>
+              <p style="font-size: 13px; color: var(--muted); margin-top: 2px;">Track the status and resolution timeline of your submitted campus issues.</p>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="fetchMyReports()">Refresh</button>
+          </div>
+
+          <div id="myreports-list" style="display: flex; flex-direction: column; gap: 12px;">
+            <!-- Loaded dynamically -->
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================================================= -->
+    <!-- VIEW 3: LEGAL & SUPPORT PAGES                             -->
+    <!-- ========================================================= -->
+
+    <!-- TERMS & CONDITIONS (/terms) -->
+    <section id="view-terms" class="page-view" style="display: none; max-width: 720px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px;">
+      <div class="legal-badge" style="display: inline-block; background: #FEF3C7; color: #92400E; border: 1px solid #FCD34D; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 9999px; margin-bottom: 12px;">Draft — pending college review</div>
+      <h1 style="font-size: 22px; font-weight: 700; margin-bottom: 12px;">Terms &amp; Conditions</h1>
+      <p style="font-size: 13px; color: var(--muted); line-height: 1.6; margin-bottom: 16px;">
+        Campus Black Box is provided as an educational project and campus infrastructure management facility. By accessing this platform, students, faculty, and administrative users agree to report factual maintenance observations in good faith. Frivolous or malicious submissions are subject to college disciplinary policies.
+      </p>
+      <h3 style="font-size: 15px; font-weight: 600; margin-top: 16px; margin-bottom: 6px;">1. Service Availability</h3>
+      <p style="font-size: 13px; color: var(--muted); line-height: 1.6; margin-bottom: 12px;">The platform is provided for campus reporting on an as-available basis. Emergency physical or medical hazards must also be reported directly to campus emergency security.</p>
+      <h3 style="font-size: 15px; font-weight: 600; margin-top: 16px; margin-bottom: 6px;">2. User Conduct</h3>
+      <p style="font-size: 13px; color: var(--muted); line-height: 1.6;">Reporters must provide clear descriptions and genuine photographic evidence corresponding to the indicated room or facility.</p>
+    </section>
+
+    <!-- PRIVACY POLICY (/privacy) -->
+    <section id="view-privacy" class="page-view" style="display: none; max-width: 720px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px;">
+      <div class="legal-badge" style="display: inline-block; background: #FEF3C7; color: #92400E; border: 1px solid #FCD34D; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 9999px; margin-bottom: 12px;">Draft — pending college review</div>
+      <h1 style="font-size: 22px; font-weight: 700; margin-bottom: 12px;">Privacy Policy</h1>
+      <p style="font-size: 13px; color: var(--muted); line-height: 1.6; margin-bottom: 16px;">
+        Campus Black Box values user privacy. Reports are linked to authenticated college email accounts to prevent automated spam and enable dispatch confirmation. Personal identities are strictly shielded from public view.
+      </p>
+      <h3 style="font-size: 15px; font-weight: 600; margin-top: 16px; margin-bottom: 6px;">Data Retention &amp; Security</h3>
+      <p style="font-size: 13px; color: var(--muted); line-height: 1.6;">Incident data, resolution timestamps, and uploaded media are retained for facility auditing and continuous infrastructure improvement.</p>
+    </section>
+
+    <!-- ACCEPTABLE USE (/acceptable-use) -->
+    <section id="view-acceptable-use" class="page-view" style="display: none; max-width: 720px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px;">
+      <div class="legal-badge" style="display: inline-block; background: #FEF3C7; color: #92400E; border: 1px solid #FCD34D; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 9999px; margin-bottom: 12px;">Draft — pending college review</div>
+      <h1 style="font-size: 22px; font-weight: 700; margin-bottom: 12px;">Acceptable Use Policy</h1>
+      <p style="font-size: 13px; color: var(--muted); line-height: 1.6; margin-bottom: 16px;">
+        Users must utilize Campus Black Box exclusively for legitimate infrastructure, sanitation, electrical, network, and safety reporting on campus premises.
+      </p>
+      <ul style="font-size: 13px; color: var(--muted); line-height: 1.6; padding-left: 20px;">
+        <li>Do not submit non-campus or irrelevant personal grievances.</li>
+        <li>Do not upload inappropriate, offensive, or non-facility images.</li>
+        <li>Do not attempt to tamper with QR token deep links or API boundaries.</li>
+      </ul>
+    </section>
+
+    <!-- HOW TO REPORT (HELP) (/help) -->
+    <section id="view-help" class="page-view" style="display: none; max-width: 720px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px;">
+      <div class="legal-badge" style="display: inline-block; background: #FEF3C7; color: #92400E; border: 1px solid #FCD34D; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 9999px; margin-bottom: 12px;">Draft — pending college review</div>
+      <h1 style="font-size: 22px; font-weight: 700; margin-bottom: 12px;">How to Report an Issue (Help)</h1>
+      <ol style="font-size: 13px; color: var(--muted); line-height: 1.8; padding-left: 20px; margin-bottom: 16px;">
+        <li><strong>Locate the Room QR Code:</strong> Scan the physical plaque mounted near room entrances to automatically bind the exact location.</li>
+        <li><strong>Describe the Problem:</strong> Provide concrete details. The integrated AI will suggest the most accurate maintenance category.</li>
+        <li><strong>Attach a Photo:</strong> Take a photo showing the fault clearly (supports JPEG, PNG, WebP up to 5MB).</li>
+        <li><strong>Track Live Progress:</strong> View real-time status updates under the "My Reports" tab.</li>
+      </ol>
+    </section>
+
+    <!-- CONTACT ADMIN OFFICE (/contact) -->
+    <section id="view-contact" class="page-view" style="display: none; max-width: 720px; margin: 0 auto; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 32px;">
+      <div class="legal-badge" style="display: inline-block; background: #FEF3C7; color: #92400E; border: 1px solid #FCD34D; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 9999px; margin-bottom: 12px;">Draft — pending college review</div>
+      <h1 style="font-size: 22px; font-weight: 700; margin-bottom: 12px;">Contact Campus Administration</h1>
+      <p style="font-size: 13px; color: var(--muted); line-height: 1.6; margin-bottom: 16px;">
+        For critical physical emergencies, fires, or urgent safety hazards requiring immediate response, contact campus emergency dispatch directly:
+      </p>
+      <div style="background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; font-size: 13px; line-height: 1.8;">
+        <div><strong>Campus Security Hotline:</strong> +91 (0) 80-2345-6000 (24/7)</div>
+        <div><strong>Administrative Facility Office:</strong> Main Building, Ground Floor, Room 12</div>
+        <div><strong>Phone:</strong> +91 (0) 80-2345-6789 (Ext. 204)</div>
+        <div><strong>Email:</strong> admin.office@campus.edu</div>
+        <div><strong>Hours:</strong> Monday – Saturday, 8:30 AM – 5:30 PM</div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- MODAL: REPORT DETAIL & STATUS TIMELINE (My Reports) -->
+  <div id="modal-report-detail" class="modal-backdrop" style="display: none;" onclick="handleModalBackdropClick(event, 'modal-report-detail')">
+    <div class="modal-card" style="max-width: 540px;">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px;">
+        <div>
+          <span style="font-weight: 700; font-size: 16px;" id="detail-ticket-id">Report #</span>
+          <span id="detail-status-pill" class="chip" style="font-size: 11px; margin-left: 6px; text-transform: capitalize;">Pending</span>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="closeReportDetailModal()">Close</button>
+      </div>
+
+      <div style="font-size: 13px; margin-bottom: 12px;">
+        <strong>Location:</strong> <span id="detail-location-text">Block 3 · Room 302</span>
+      </div>
+
+      <p id="detail-desc-text" style="font-size: 13px; line-height: 1.5; margin-bottom: 16px; background: var(--surface); padding: 12px; border-radius: 8px; border: 1px solid var(--border);"></p>
+
+      <!-- Attached Photo Preview (if available) -->
+      <div id="detail-photo-wrap" style="display: none; margin-bottom: 16px;">
+        <div style="font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 6px;">ATTACHED PHOTO</div>
+        <img id="detail-photo-img" src="" alt="Report photo" style="max-height: 160px; border-radius: 8px; border: 1px solid var(--border);">
+      </div>
+
+      <!-- Updates added to this report -->
+      <div id="detail-updates-box" style="display: none; margin-bottom: 16px;">
+        <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; letter-spacing: 0.5px;">Community Notes &amp; Updates</div>
+        <div id="detail-updates-list" style="display: flex; flex-direction: column; gap: 6px;"></div>
+      </div>
+
+      <!-- Corrective Action Taken (When resolved) -->
+      <div id="detail-resolution-action-box" style="display: none; background: #ECFDF5; border: 1px solid #A7F3D0; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+        <div style="font-size: 11px; font-weight: 700; color: #065F46; text-transform: uppercase;">Corrective Action Taken</div>
+        <div id="detail-resolution-action-text" style="font-size: 13px; color: #064E3B; margin-top: 4px;"></div>
+      </div>
+
+      <!-- Chronological Status Progression Timeline -->
+      <div>
+        <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; letter-spacing: 0.5px;">Status History Timeline</div>
+        <div id="detail-history-timeline" style="display: flex; flex-direction: column; gap: 8px;">
+          <!-- Loaded dynamically -->
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: REPORTER SIGN IN (Student & Faculty Only) -->
+  <div id="modal-reporter-login" class="modal-backdrop" style="display: none;" onclick="handleModalBackdropClick(event, 'modal-reporter-login')">
+    <div class="modal-card" style="max-width: 420px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 style="font-size: 18px; font-weight: 700;">Reporter Sign In</h3>
+        <button class="btn btn-secondary btn-sm" onclick="closeReporterLoginModal()">✕</button>
+      </div>
+
+      <p style="font-size: 13px; color: var(--muted); margin-bottom: 16px;">Sign in with your Student or Faculty credentials to report issues.</p>
+
+      <!-- Demo Quick-Fill for Reporter (Only Student & Faculty, shown only when demo_mode=true) -->
+      <div id="reporter-demo-quickfill" style="display: none; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 16px;">
+        <div style="font-size: 10px; font-weight: 600; color: var(--muted); text-transform: uppercase; margin-bottom: 6px;">Demo Quick-Fill</div>
+        <div style="display: flex; gap: 6px;">
+          <button type="button" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 8px;" onclick="fillReporterCredentials('student')">Student Account</button>
+          <button type="button" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 8px;" onclick="fillReporterCredentials('faculty')">Faculty Account</button>
+        </div>
+      </div>
+
+      <div id="reporter-login-error" style="display: none; padding: 8px 12px; background: var(--prio-critical-bg); color: var(--prio-critical-text); border: 1px solid var(--prio-critical-border); border-radius: 8px; font-size: 12px; margin-bottom: 14px;"></div>
+
+      <form onsubmit="handleReporterLoginForm(event)">
+        <div class="form-group" style="margin-bottom: 14px;">
+          <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px;">College Email</label>
+          <input type="email" id="reporter-email-input" required class="form-input" placeholder="student@campus.edu" style="width: 100%;">
+        </div>
+        <div class="form-group" style="margin-bottom: 20px;">
+          <label style="display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px;">Password</label>
+          <input type="password" id="reporter-password-input" required class="form-input" placeholder="" style="width: 100%;">
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%; justify-content: center; height: 40px;">Sign In</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- REPORTER FOOTER (Zero links to staff) -->
+  <footer class="site-footer" style="border-top: 1px solid var(--border); padding: 32px 0 24px; background: var(--surface); margin-top: 40px; font-size: 12px; color: var(--muted);">
+    <div class="container" style="display: flex; flex-direction: column; gap: 16px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-weight: 700; color: var(--text);">Campus Black Box</span>
+          <span>·</span>
+          <span>Campus Infrastructure Intelligence</span>
+        </div>
+        <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+          <a href="/terms" onclick="navigateRoute(event, '/terms')" style="color: var(--muted); text-decoration: none;">Terms &amp; Conditions</a>
+          <a href="/privacy" onclick="navigateRoute(event, '/privacy')" style="color: var(--muted); text-decoration: none;">Privacy Policy</a>
+          <a href="/acceptable-use" onclick="navigateRoute(event, '/acceptable-use')" style="color: var(--muted); text-decoration: none;">Acceptable Use</a>
+          <a href="/help" onclick="navigateRoute(event, '/help')" style="color: var(--muted); text-decoration: none;">How to Report</a>
+          <a href="/contact" onclick="navigateRoute(event, '/contact')" style="color: var(--muted); text-decoration: none;">Contact Admin Office</a>
+        </div>
+      </div>
+      <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border); padding-top: 14px; font-size: 11px;">
+        <div>© 2026 Campus Black Box - PBL Project</div>
+        <div>Accessibility Statement: Compliant with WCAG 2.1 AA Standards</div>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

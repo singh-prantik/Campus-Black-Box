@@ -1,0 +1,10 @@
+node_modules
+frontend
+.git
+.gitignore
+*.log
+campus_blackbox.db
+campus_blackbox.db-journal
+screenshots
+capture_screenshots.ps1
+
