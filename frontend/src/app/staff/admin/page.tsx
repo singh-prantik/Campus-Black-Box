@@ -1,10 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiGetReports, apiGetAnalyticsSummary, apiUpdateReport, apiResolveReport, apiGetStaff } from "@/lib/api";
+import Link from "next/link";
+import StaffNavbar from "@/components/StaffNavbar";
+import {
+  apiGetReports,
+  apiGetAnalyticsSummary,
+  apiUpdateReport,
+  apiResolveReport,
+  apiGetStaff,
+  useStaffSession,
+} from "@/lib/staffApi";
 import { Report, AnalyticsSummary, StaffMember } from "@/types";
 
 export default function StaffAdminPage() {
+  const { isAuthenticated, isAdmin, loading: authLoading } = useStaffSession();
   const [reports, setReports] = useState<Report[]>([]);
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [staff, setStaff] = useState<StaffMember[]>([]);
@@ -16,8 +26,9 @@ export default function StaffAdminPage() {
   const [remarksText, setRemarksText] = useState("");
 
   useEffect(() => {
+    if (authLoading || !isAdmin) return;
     loadData();
-  }, [filterStatus]);
+  }, [authLoading, isAdmin, filterStatus]);
 
   async function loadData() {
     try {
@@ -61,8 +72,36 @@ export default function StaffAdminPage() {
     }
   }
 
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-bg text-text">
+        <StaffNavbar />
+        <div className="p-12 text-center text-xs text-muted">Validating staff session...</div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated || !isAdmin) {
+    return (
+      <div className="min-h-screen bg-bg text-text">
+        <StaffNavbar />
+        <div style={{ maxWidth: 440, margin: "64px auto", padding: 32, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, textAlign: "center" }}>
+          <h1 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Admin Session Required</h1>
+          <p style={{ color: "var(--muted)", fontSize: 13, marginBottom: 16 }}>
+            Sign in on the tab-scoped Staff Portal to manage campus incidents.
+          </p>
+          <Link href="/staff/login" style={{ padding: "8px 16px", background: "var(--accent)", color: "#fff", borderRadius: 8, textDecoration: "none", fontSize: 13, fontWeight: 600 }}>
+            Staff Sign In
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ maxWidth: 1200, margin: "0 auto", padding: "28px 16px" }}>
+    <div className="min-h-screen bg-bg text-text">
+      <StaffNavbar />
+      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "28px 16px" }}>
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 24, fontWeight: 700 }}>Incident Triage &amp; Dispatch Console</h1>
         <p style={{ color: "var(--muted)", fontSize: 13 }}>Review campus infrastructure tickets and allocate qualified technicians.</p>
@@ -207,6 +246,7 @@ export default function StaffAdminPage() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

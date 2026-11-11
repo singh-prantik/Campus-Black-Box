@@ -1,26 +1,17 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Report, StaffMember } from "@/types";
-import { apiUpdateReport, apiResolveReport, apiGetStaff } from "@/lib/api";
-import { StatusBadge, PriorityBadge } from "./StatusBadge";
-import { useAuth } from "@/lib/auth";
-import toast from "react-hot-toast";
-import {
-  X,
-  MapPin,
-  User,
-  Sparkles,
-  CheckCircle2,
-  AlertCircle,
-  Clock,
-} from "lucide-react";
+import { Report } from "@/types";
+import { apiGetReport, apiFetchProtectedPhoto } from "@/lib/api";
+import { StatusBadge } from "./StatusBadge";
+import { X, MapPin, Clock, CheckCircle2, Image as ImageIcon } from "lucide-react";
 
-const statusSteps = ["pending", "assigned", "in_progress", "resolved"];
+const statusSteps = ["submitted", "pending", "assigned", "in_progress", "resolved"];
 const statusStepLabels: Record<string, string> = {
+  submitted: "Submitted",
   pending: "Pending",
   assigned: "Assigned",
-  in_progress: "In progress",
+  in_progress: "In Progress",
   resolved: "Resolved",
 };
 
@@ -33,163 +24,133 @@ interface ReportDetailModalProps {
 export default function ReportDetailModal({
   report,
   onClose,
-  onUpdate,
 }: ReportDetailModalProps) {
-  const { user } = useAuth();
-  const isAdmin = user?.role === "admin" || user?.role === "super_admin";
-  const isAssignedTechnician =
-    user?.role === "maintenance" && user?.id === report.assigned_to;
-  const canManage = isAdmin || isAssignedTechnician;
-
-  const [staff, setStaff] = useState<StaffMember[]>([]);
-  const [assignTo, setAssignTo] = useState<string>(
-    report.assigned_to ? String(report.assigned_to) : ""
-  );
-  const [newStatus, setNewStatus] = useState<"pending" | "assigned" | "in_progress" | "resolved">(
-    report.status
-  );
-  const [newPriority, setNewPriority] = useState<"low" | "medium" | "high" | "critical">(
-    report.priority
-  );
-  const [resolveAction, setResolveAction] = useState("");
-  const [resolveRemarks, setResolveRemarks] = useState("");
-  const [showResolve, setShowResolve] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [detailedReport, setDetailedReport] = useState<Report>(report);
+  const [photoSrc, setPhotoSrc] = useState<string | null>(null);
+  const [photoError, setPhotoError] = useState(false);
 
   useEffect(() => {
-    if (isAdmin) {
-      apiGetStaff()
-        .then((res) => setStaff(res.staff))
-        .catch(() => {});
-    }
-  }, [isAdmin]);
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      const updates: Partial<Report> = {};
-
-      if (isAdmin && assignTo && Number(assignTo) !== report.assigned_to) {
-        updates.assigned_to = Number(assignTo);
-        if (newStatus === "pending") {
-          updates.status = "assigned";
+    let active = true;
+    apiGetReport(report.id)
+      .then((res) => {
+        if (active && res?.report) {
+          setDetailedReport(res.report);
         }
-      }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [report.id]);
 
-      if (newStatus !== report.status) {
-        // Enforce state transitions
-        if (report.status === "pending" && newStatus === "resolved") {
-          toast.error("Pending tickets cannot be directly resolved. Must transition through Assigned -> In Progress.");
-          setSaving(false);
-          return;
-        }
-        updates.status = newStatus;
-      }
+  const rawPhoto = detailedReport.photo_path || detailedReport.photo_url || "";
 
-      if (isAdmin && newPriority !== report.priority) {
-        updates.priority = newPriority;
-      }
+  useEffect(() => {
+    let active = true;
+    let blobUrl: string | null = null;
+    setPhotoError(false);
 
-      const updated = await apiUpdateReport(report.id, updates);
-      toast.success("Incident updated successfully");
-      onUpdate?.(updated);
-      onClose();
-    } catch (err: any) {
-      toast.error(err.message || "Failed to update incident");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleResolve = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!resolveAction.trim()) {
-      toast.error("Please describe the resolution action taken");
+    if (!rawPhoto) {
+      setPhotoSrc(null);
       return;
     }
-    setSaving(true);
-    try {
-      await apiResolveReport(report.id, resolveAction.trim(), resolveRemarks.trim());
-      toast.success("Incident marked resolved");
-      onUpdate?.({
-        ...report,
-        status: "resolved",
-        resolved_at: new Date().toISOString(),
-      });
-      onClose();
-    } catch (err: any) {
-      toast.error(err.message || "Failed to resolve incident");
-    } finally {
-      setSaving(false);
-    }
-  };
 
-  const currentStepIdx = statusSteps.indexOf(report.status);
-  const locationString = report.location
-    ? `${report.location.block} · ${report.location.room}`
-    : "Campus location";
-  const reporterRole = report.reporter_role || report.reporter?.role || "Student";
+    if (rawPhoto.includes("/api/photos/")) {
+      apiFetchProtectedPhoto(rawPhoto)
+        .then((url) => {
+          if (!active) {
+            if (url && url.startsWith("blob:")) URL.revokeObjectURL(url);
+            return;
+          }
+          blobUrl = url;
+          setPhotoSrc(url);
+        })
+        .catch(() => {
+          if (active) setPhotoError(true);
+        });
+    } else {
+      setPhotoSrc(rawPhoto);
+    }
+
+    return () => {
+      active = false;
+      if (blobUrl && blobUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(blobUrl);
+      }
+    };
+  }, [rawPhoto]);
+
+  const currentStepIdx = statusSteps.indexOf(detailedReport.status);
+  const blockName = detailedReport.location?.block || detailedReport.block;
+  const roomName = detailedReport.location?.room || detailedReport.room;
+  const locationString =
+    blockName && roomName
+      ? `${blockName} · ${roomName}`
+      : blockName || roomName || "Campus location";
+
+  const resolutionAction =
+    detailedReport.resolution_action ||
+    detailedReport.resolutions?.[0]?.action ||
+    null;
 
   return (
     <div
       role="dialog"
       aria-modal="true"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-bg/80 backdrop-blur-none"
+      aria-label={`Incident #${detailedReport.id} Details`}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-[2px]"
+      onClick={onClose}
     >
-      <div className="relative w-full max-w-xl bg-surface border border-border rounded-card p-6 max-h-[90vh] overflow-y-auto text-text">
-        {/* Header */}
-        <div className="flex items-start justify-between pb-4 border-b border-border">
-          <div>
-            <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-              <span className="text-sm font-semibold text-accent">#{report.id}</span>
-              <StatusBadge status={report.status} />
-              <PriorityBadge priority={report.priority} />
+      <div
+        className="w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-surface border border-border rounded-modal p-6 space-y-5 animate-dropdown shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Modal Header */}
+        <div className="flex items-start justify-between gap-4 border-b border-border pb-4">
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-mono text-muted font-medium">
+                Incident #{detailedReport.id}
+              </span>
+              <StatusBadge status={detailedReport.status} />
+              <span className="text-xs font-medium text-accent">{detailedReport.category}</span>
             </div>
-            <h2 className="text-base font-bold text-text">
-              {report.title || report.description}
+            <h2 className="text-lg font-bold text-text leading-snug">
+              {detailedReport.title || detailedReport.description?.slice(0, 72)}
             </h2>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            aria-label="Close modal"
-            className="p-1 rounded text-muted hover:text-text hover:bg-bg border border-transparent hover:border-border"
+            aria-label="Close detail dialog"
+            className="p-1.5 rounded-input text-muted hover:text-text hover:bg-bg border border-transparent hover:border-border transition-colors"
           >
             <X className="w-5 h-5 stroke-[1.5]" />
           </button>
         </div>
 
         {/* Status Timeline */}
-        <div className="py-4 border-b border-border">
+        <div className="p-4 rounded-card bg-bg border border-border">
           <div className="text-xs font-semibold text-muted uppercase tracking-wider mb-3">
-            Status Lifecycle
+            Resolution Progress
           </div>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2 overflow-x-auto">
             {statusSteps.map((step, idx) => {
-              const isPastOrCurrent = idx <= currentStepIdx;
-              const isCurrent = idx === currentStepIdx;
+              const completed = idx <= currentStepIdx;
               return (
-                <div key={step} className="flex-1 flex flex-col items-center relative">
-                  {idx > 0 && (
-                    <div
-                      className={`absolute top-2.5 right-1/2 left-[-50%] h-0.5 ${
-                        idx <= currentStepIdx ? "bg-accent" : "bg-border"
-                      }`}
-                    />
-                  )}
+                <div key={step} className="flex items-center gap-2 flex-1 min-w-[80px]">
                   <div
-                    className={`relative z-10 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold border ${
-                      isCurrent
-                        ? "bg-accent text-white border-accent"
-                        : isPastOrCurrent
-                        ? "bg-text text-bg border-text"
-                        : "bg-surface border-border text-muted"
+                    className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
+                      completed
+                        ? "bg-accent text-white"
+                        : "bg-surface border border-border text-muted"
                     }`}
                   >
-                    {isPastOrCurrent ? "✓" : idx + 1}
+                    {idx < currentStepIdx ? "✓" : idx + 1}
                   </div>
                   <span
-                    className={`mt-1.5 text-[11px] font-medium ${
-                      isCurrent ? "text-accent font-semibold" : "text-muted"
+                    className={`text-xs font-medium truncate ${
+                      completed ? "text-text" : "text-muted"
                     }`}
                   >
                     {statusStepLabels[step]}
@@ -200,250 +161,90 @@ export default function ReportDetailModal({
           </div>
         </div>
 
-        {/* Content Details */}
-        <div className="py-4 space-y-4 text-xs">
-          <div>
-            <div className="text-muted font-medium mb-1">Description</div>
-            <p className="text-sm text-text leading-relaxed bg-bg border border-border rounded-input p-3">
-              {report.description}
-            </p>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="p-3 bg-bg border border-border rounded-input">
-              <div className="text-muted font-medium flex items-center gap-1 mb-1">
-                <MapPin className="w-3.5 h-3.5 stroke-[1.5]" />
-                Location
-              </div>
+        {/* Location & Timestamp */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+          <div className="p-3 rounded-input bg-bg border border-border flex items-center gap-2.5">
+            <MapPin className="w-4 h-4 text-accent shrink-0" />
+            <div>
+              <div className="text-[11px] text-muted">Location</div>
               <div className="font-semibold text-text">{locationString}</div>
             </div>
-
-            <div className="p-3 bg-bg border border-border rounded-input">
-              <div className="text-muted font-medium flex items-center gap-1 mb-1">
-                <User className="w-3.5 h-3.5 stroke-[1.5]" />
-                Reported by
-              </div>
-              <div className="font-semibold text-text">{reporterRole}</div>
-            </div>
           </div>
-
-          {/* Honest AI Categorization Details (FR-16, FR-21) */}
-          <div className="p-3 bg-bg border border-border rounded-input">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-muted font-medium flex items-center gap-1">
-                <Sparkles className="w-3.5 h-3.5 text-accent stroke-[1.5]" />
-                Triage Classification
-              </span>
-              <span className="text-[11px] text-muted">Rule-based suggestion (prototype)</span>
-            </div>
-            <div className="text-text font-medium flex items-center gap-2">
-              <span>Category:</span>
-              <span className="px-2 py-0.5 rounded-chip bg-surface border border-border font-semibold">
-                {report.category}
-              </span>
-            </div>
-          </div>
-
-          {/* Resolved Ticket Notice */}
-          {report.status === "resolved" && (
-            <div className="p-3 bg-surface border border-border rounded-input space-y-1">
-              <div className="text-emerald-500 font-semibold flex items-center gap-1.5 text-xs">
-                <CheckCircle2 className="w-4 h-4 stroke-[1.5]" />
-                Resolved & Closed
-              </div>
-              <div className="text-[11px] text-muted">
-                {report.resolved_at
-                  ? `Resolved at: ${new Date(report.resolved_at).toLocaleString()}`
-                  : "Resolution action recorded in audit log."}
-              </div>
-            </div>
-          )}
-
-          {/* Image Thumbnail Preview */}
-          {report.photo_url && (
+          <div className="p-3 rounded-input bg-bg border border-border flex items-center gap-2.5">
+            <Clock className="w-4 h-4 text-muted shrink-0" />
             <div>
-              <div className="text-muted font-medium mb-1.5">Attached photo evidence</div>
-              <div className="w-full aspect-[16/10] max-h-48 rounded-input overflow-hidden border border-border bg-bg">
-                <img
-                  src={report.photo_url}
-                  alt={report.alt_text || "Incident photo"}
-                  className="w-full h-full object-cover"
-                />
+              <div className="text-[11px] text-muted">Submitted</div>
+              <div className="font-semibold text-text">
+                {new Date(detailedReport.created_at).toLocaleString()}
               </div>
             </div>
-          )}
-
-          {/* Incident Management Controls (Admin or Assigned Technician) */}
-          {canManage && report.status !== "resolved" && (
-            <div className="pt-4 border-t border-border space-y-3">
-              <div className="font-semibold text-text text-sm">Incident Management</div>
-
-              {isAdmin && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-muted font-medium mb-1">Status</label>
-                    <select
-                      value={newStatus}
-                      onChange={(e) =>
-                        setNewStatus(
-                          e.target.value as "pending" | "assigned" | "in_progress" | "resolved"
-                        )
-                      }
-                      className="w-full h-9 px-2 bg-bg border border-border rounded-input text-text text-xs focus:border-accent"
-                    >
-                      {report.status === "pending" && (
-                        <>
-                          <option value="pending">Pending (Unassigned)</option>
-                          <option value="assigned">Assigned</option>
-                        </>
-                      )}
-                      {report.status === "assigned" && (
-                        <>
-                          <option value="assigned">Assigned</option>
-                          <option value="in_progress">In progress</option>
-                        </>
-                      )}
-                      {report.status === "in_progress" && (
-                        <>
-                          <option value="in_progress">In progress</option>
-                        </>
-                      )}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-muted font-medium mb-1">Priority</label>
-                    <select
-                      value={newPriority}
-                      onChange={(e) =>
-                        setNewPriority(
-                          e.target.value as "low" | "medium" | "high" | "critical"
-                        )
-                      }
-                      className="w-full h-9 px-2 bg-bg border border-border rounded-input text-text text-xs focus:border-accent"
-                    >
-                      <option value="low">Low</option>
-                      <option value="medium">Medium</option>
-                      <option value="high">High</option>
-                      <option value="critical">Critical</option>
-                    </select>
-                  </div>
-                </div>
-              )}
-
-              {isAdmin && (
-                <div>
-                  <label className="block text-muted font-medium mb-1">Assign Technician</label>
-                  <select
-                    value={assignTo}
-                    onChange={(e) => {
-                      setAssignTo(e.target.value);
-                      if (e.target.value && newStatus === "pending") {
-                        setNewStatus("assigned");
-                      }
-                    }}
-                    className="w-full h-9 px-2 bg-bg border border-border rounded-input text-text text-xs focus:border-accent"
-                  >
-                    <option value="">Unassigned</option>
-                    {staff.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name} ({s.assigned_count} active tickets)
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              {/* Technician Actions for Assigned ticket */}
-              {!isAdmin && isAssignedTechnician && report.status === "assigned" && (
-                <div className="pt-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNewStatus("in_progress");
-                      handleSave();
-                    }}
-                    disabled={saving}
-                    className="w-full py-2 rounded-input bg-accent text-white text-xs font-semibold hover:bg-accent-hover"
-                  >
-                    Start Work (Mark In Progress)
-                  </button>
-                </div>
-              )}
-
-              <div className="flex justify-end gap-2 pt-2">
-                {/* Resolve only available if In Progress (or Assigned if technician starts work) */}
-                {report.status !== "pending" && (
-                  <button
-                    type="button"
-                    onClick={() => setShowResolve(!showResolve)}
-                    className="px-3 py-1.5 rounded-input border border-border bg-bg text-text hover:bg-border/30 text-xs font-medium"
-                  >
-                    {showResolve ? "Cancel resolve" : "Log resolution"}
-                  </button>
-                )}
-
-                {report.status === "pending" && (
-                  <span className="text-[11px] text-muted self-center italic">
-                    Assign a technician before resolving.
-                  </span>
-                )}
-
-                {isAdmin && (
-                  <button
-                    type="button"
-                    onClick={handleSave}
-                    disabled={saving}
-                    className="px-4 py-1.5 rounded-input bg-text text-bg text-xs font-semibold hover:opacity-90 disabled:opacity-50"
-                  >
-                    {saving ? "Saving..." : "Save updates"}
-                  </button>
-                )}
-              </div>
-
-              {/* Resolution Form Drawer (Requires Action Text AC2.2) */}
-              {showResolve && (
-                <form
-                  onSubmit={handleResolve}
-                  className="p-3 bg-bg border border-border rounded-input space-y-2 mt-2"
-                >
-                  <div className="font-semibold text-text text-xs">Resolution Details</div>
-                  <div>
-                    <label className="block text-muted text-[11px] mb-1">
-                      Action taken * (Required)
-                    </label>
-                    <input
-                      type="text"
-                      value={resolveAction}
-                      onChange={(e) => setResolveAction(e.target.value)}
-                      placeholder="e.g. Replaced burnt capacitor on ceiling fan"
-                      className="w-full h-8 px-2 bg-surface border border-border rounded-input text-text text-xs focus:border-accent"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-muted text-[11px] mb-1">Remarks</label>
-                    <input
-                      type="text"
-                      value={resolveRemarks}
-                      onChange={(e) => setResolveRemarks(e.target.value)}
-                      placeholder="e.g. Tested at full speed for 10 minutes"
-                      className="w-full h-8 px-2 bg-surface border border-border rounded-input text-text text-xs focus:border-accent"
-                    />
-                  </div>
-                  <div className="flex justify-end pt-1">
-                    <button
-                      type="submit"
-                      disabled={saving || !resolveAction.trim()}
-                      className="px-3 py-1.5 rounded-input bg-accent text-white text-xs font-semibold hover:bg-accent-hover disabled:opacity-50"
-                    >
-                      Confirm resolution
-                    </button>
-                  </div>
-                </form>
-              )}
-            </div>
-          )}
+          </div>
         </div>
+
+        {/* Photo */}
+        {photoSrc && !photoError && (
+          <div className="rounded-input overflow-hidden border border-border bg-white p-2 flex items-center justify-center">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={photoSrc}
+              alt={`Attached evidence for incident #${detailedReport.id}`}
+              onError={() => setPhotoError(true)}
+              className="max-h-64 w-full object-contain rounded"
+            />
+          </div>
+        )}
+        {!photoSrc && rawPhoto && (
+          <div className="p-4 rounded-input border border-border bg-bg text-xs text-muted flex items-center gap-2">
+            <ImageIcon className="w-4 h-4" />
+            <span>Loading attached photo...</span>
+          </div>
+        )}
+
+        {/* Description */}
+        <div>
+          <div className="text-xs font-semibold text-muted uppercase tracking-wider mb-1.5">
+            Description
+          </div>
+          <p className="text-sm text-text leading-relaxed bg-bg p-3.5 rounded-input border border-border">
+            {detailedReport.description}
+          </p>
+        </div>
+
+        {/* Resolution Action Text (reporter-visible summary, never internal remarks) */}
+        {resolutionAction && (
+          <div className="p-3.5 rounded-input border border-green-500/30 bg-green-500/10 space-y-1">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-green-600 dark:text-green-400">
+              <CheckCircle2 className="w-4 h-4" />
+              Resolution Summary
+            </div>
+            <p className="text-xs text-text leading-relaxed">{resolutionAction}</p>
+          </div>
+        )}
+
+        {/* Status Timeline Log */}
+        {detailedReport.timeline && detailedReport.timeline.length > 0 && (
+          <div>
+            <div className="text-xs font-semibold text-muted uppercase tracking-wider mb-2">
+              Status Timeline
+            </div>
+            <div className="space-y-1.5">
+              {detailedReport.timeline.map((step, i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between px-3 py-2 rounded-input bg-bg border border-border text-xs"
+                >
+                  <span className="text-text font-medium capitalize">
+                    {step.from_status ? `${step.from_status.replace("_", " ")} → ` : ""}
+                    {step.to_status.replace("_", " ")}
+                  </span>
+                  <span className="text-muted text-[11px]">
+                    {new Date(step.changed_at).toLocaleString()}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -24,7 +24,7 @@ export const SAMPLE_INCIDENTS: Report[] = [
     priority: "medium",
     status: "in_progress",
     assigned_to: 3,
-    photo_url: "/samples/projector.webp",
+    photo_url: null,
     alt_text: "Ceiling-mounted classroom projector showing a blank black screen",
     reporter_role: "Faculty",
     similar_count: 2,

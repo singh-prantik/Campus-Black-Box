@@ -1,76 +1,125 @@
 import {
+  Report,
+  Location,
+  Prediction,
   AuthResponse,
   User,
-  Report,
-  ReportsResponse,
-  Location,
-  AnalyticsSummary,
-  HeatmapLocation,
-  TrendData,
-  CategoryData,
-  StaffMember,
+  NotificationItem,
+  StatusHistoryItem,
 } from "@/types";
-import { SAMPLE_INCIDENTS, SAMPLE_LOCATIONS, SAMPLE_ANALYTICS } from "./mockData";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+export const REPORTER_TOKEN_KEY = "cbb_reporter_token";
+export const REPORTER_AUTH_INVALID_EVENT = "cbb-reporter-auth-invalid";
+export const SESSION_INVALID_MSG = "Your session is not valid for reporting. Please sign in again.";
 
-let localReports: Report[] = [...SAMPLE_INCIDENTS];
-
-function getToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return (
-    localStorage.getItem("cbb_staff_token") ||
-    localStorage.getItem("cbb_reporter_token") ||
-    localStorage.getItem("token") ||
-    null
-  );
+/** Decode JWT payload client-side without external deps (validation happens server-side). */
+export function decodeJwtPayload(token: string): Record<string, any> | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "=");
+    const json = typeof window !== "undefined" ? window.atob(padded) : Buffer.from(padded, "base64").toString("utf8");
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
 }
 
-export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const token = getToken();
-  const headers: Record<string, string> = {};
+export function isValidReporterJwt(token: string | null): boolean {
+  if (!token) return false;
+  const payload = decodeJwtPayload(token);
+  if (!payload) return false;
+  if (payload.aud !== "reporter") return false;
+  if (payload.role !== "student" && payload.role !== "faculty") return false;
+  if (typeof payload.exp === "number" && payload.exp * 1000 <= Date.now()) return false;
+  return true;
+}
+
+/** Reporter portal reads ONLY cbb_reporter_token from localStorage. */
+export function getReporterToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(REPORTER_TOKEN_KEY);
+}
+
+export function setReporterToken(token: string): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(REPORTER_TOKEN_KEY, token);
+}
+
+export function clearReporterToken(): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(REPORTER_TOKEN_KEY);
+}
+
+function notifyReporterAuthInvalid(): void {
+  clearReporterToken();
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(REPORTER_AUTH_INVALID_EVENT));
+  }
+}
+
+export async function apiFetch<T>(
+  path: string,
+  options: RequestInit = {},
+  { authRequired = false }: { authRequired?: boolean } = {}
+): Promise<T> {
+  const token = getReporterToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(options.headers as Record<string, string>),
+  };
 
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
+  } else if (authRequired) {
+    notifyReporterAuthInvalid();
+    throw new Error(SESSION_INVALID_MSG);
   }
 
-  if (!(options.body instanceof FormData)) {
-    headers["Content-Type"] = "application/json";
-  }
-
-  const res = await fetch(`${API_URL}${path}`, {
+  const res = await fetch(`${API_BASE}${path}`, {
     ...options,
-    headers: {
-      ...headers,
-      ...(options.headers as Record<string, string>),
-    },
+    headers,
   });
 
   const contentType = res.headers.get("content-type") || "";
-  let data: any = null;
-  if (contentType.includes("application/json")) {
-    data = await res.json();
-  } else {
-    data = await res.text();
-  }
+  const isJson = contentType.includes("application/json");
+  const data = isJson ? await res.json().catch(() => ({})) : await res.text();
 
   if (!res.ok) {
-    const errorMsg = data?.detail || data?.message || `Request failed with status ${res.status}`;
-    const err = new Error(errorMsg);
-    (err as any).status = res.status;
-    (err as any).data = data;
-    throw err;
+    const rawMsg =
+      (isJson && (data?.detail || data?.message)) ||
+      res.statusText ||
+      "API request failed";
+    const isAuthEndpoint = path === "/api/auth/login" || path === "/api/auth/register";
+    const isPortalSessionFailure =
+      !isAuthEndpoint &&
+      (res.status === 401 ||
+        (res.status === 403 &&
+          (/reporter portal|forbidden|session|token/i.test(String(rawMsg)) ||
+            path.startsWith("/api/reports") ||
+            path.startsWith("/api/auth/me") ||
+            path.startsWith("/api/notifications"))));
+
+    if (isPortalSessionFailure) {
+      notifyReporterAuthInvalid();
+      throw new Error(SESSION_INVALID_MSG);
+    }
+
+    throw new Error(typeof rawMsg === "string" ? rawMsg : "API request failed");
   }
 
   return data as T;
 }
 
-// ─── AUTH (SEPARATE REPORTER VS STAFF) ───────────────────────────────
-
+// ==========================================
+// Reporter Auth
+// ==========================================
 export async function apiLogin(email: string, password?: string): Promise<AuthResponse> {
   return await apiFetch<AuthResponse>("/api/auth/login", {
     method: "POST",
-    body: JSON.stringify({ email, password: password || "DemoPass123!" }),
+    body: JSON.stringify({ email, password }),
   });
 }
 
@@ -80,111 +129,129 @@ export async function apiRegister(
   password?: string,
   role?: string
 ): Promise<AuthResponse> {
-  try {
-    return await apiFetch<AuthResponse>("/api/auth/register", {
-      method: "POST",
-      body: JSON.stringify({ name, email, password: password || "DemoPass123!", role: role || "student" }),
-    });
-  } catch {
-    return await apiLogin(email, password);
-  }
-}
-
-export async function apiStaffLogin(email: string, password?: string): Promise<AuthResponse> {
-  return await apiFetch<AuthResponse>("/api/staff/auth/login", {
+  await apiFetch<AuthResponse>("/api/auth/register", {
     method: "POST",
-    body: JSON.stringify({ email, password: password || "DemoPass123!" }),
+    body: JSON.stringify({ name, email, password, role: role || "student" }),
   });
+  return await apiLogin(email, password);
 }
 
 export async function apiGetMe(): Promise<{ user: User }> {
-  return await apiFetch<{ user: User }>("/api/auth/me");
+  return await apiFetch<{ user: User }>("/api/auth/me", {}, { authRequired: true });
 }
 
-export async function apiGetStaffMe(): Promise<{ user: User }> {
-  return await apiFetch<{ user: User }>("/api/staff/auth/me");
-}
-
-// ─── INCIDENTS / REPORTS ───────────────────────────────────────────
-
-export async function apiGetReports(params: Record<string, any> = {}): Promise<ReportsResponse> {
-  const qs = new URLSearchParams();
-  Object.entries(params).forEach(([k, v]) => {
-    if (v !== undefined && v !== null && v !== "") {
-      qs.append(k, String(v));
-    }
-  });
-  const queryString = qs.toString();
-  return await apiFetch<ReportsResponse>(queryString ? `/api/staff/reports?${queryString}` : "/api/staff/reports");
-}
-
+// ==========================================
+// Reporter Incidents (Strict Reporter Allowlist)
+// ==========================================
 export async function apiGetMyReports(): Promise<{ reports: Report[] }> {
-  return await apiFetch<{ reports: Report[] }>("/api/reports/mine");
+  return await apiFetch<{ reports: Report[] }>("/api/reports/mine", {}, { authRequired: true });
 }
 
-export async function apiGetReport(id: number): Promise<{ report: Report; resolutions?: any[] }> {
-  return await apiFetch<{ report: Report; resolutions?: any[] }>(`/api/reports/${id}`);
+export async function apiGetReport(id: number): Promise<{ report: Report }> {
+  return await apiFetch<{ report: Report }>(`/api/reports/${id}`, {}, { authRequired: true });
 }
 
-export async function apiGetReportHistory(id: number): Promise<{ history: any[] }> {
-  return await apiFetch<{ history: any[] }>(`/api/reports/${id}/history`);
+export async function apiGetReportHistory(id: number): Promise<{ history: StatusHistoryItem[]; timeline?: StatusHistoryItem[] }> {
+  return await apiFetch<{ history: StatusHistoryItem[]; timeline?: StatusHistoryItem[] }>(
+    `/api/reports/${id}/history`,
+    {},
+    { authRequired: true }
+  );
+}
+
+export async function apiAddReportUpdate(id: number, text: string): Promise<{ success: boolean }> {
+  return await apiFetch<{ success: boolean }>(
+    `/api/reports/${id}/updates`,
+    {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    },
+    { authRequired: true }
+  );
 }
 
 export async function apiCreateReport(payload: {
   description: string;
   location_id: number;
   category?: string;
-  priority?: string;
-  photo_data?: string | null;
-  photo_url?: string;
-}): Promise<{ report: Report; prediction: any }> {
-  return await apiFetch<{ report: Report; prediction: any }>("/api/reports", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  photo_data?: string;
+}): Promise<{ report: Report; prediction: Prediction }> {
+  const token = getReporterToken();
+  if (!token || !isValidReporterJwt(token)) {
+    notifyReporterAuthInvalid();
+    throw new Error(SESSION_INVALID_MSG);
+  }
+
+  if (process.env.NODE_ENV !== "production") {
+    const decoded = decodeJwtPayload(token);
+    console.debug("[CampusBlackBox] POST /api/reports token aud:", decoded?.aud ?? "unknown");
+  }
+
+  return await apiFetch<{ report: Report; prediction: Prediction }>(
+    "/api/reports",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    { authRequired: true }
+  );
 }
 
-export async function apiUpdateReport(
-  id: number,
-  data: Partial<Report> & { action?: string; remarks?: string }
-): Promise<Report> {
-  return await apiFetch<Report>(`/api/staff/reports/${id}`, {
-    method: "PUT",
-    body: JSON.stringify(data),
+export async function apiFetchProtectedPhoto(photoPath: string): Promise<string | null> {
+  if (!photoPath) return null;
+  if (photoPath.startsWith("data:")) return photoPath;
+  const url = photoPath.startsWith("http") ? photoPath : `${API_BASE}${photoPath}`;
+  if (!photoPath.includes("/api/photos/")) return url;
+
+  const token = getReporterToken();
+  if (!token) return null;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
   });
+  if (!res.ok) return null;
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
 }
 
-export async function apiResolveReport(
-  id: number,
-  action: string,
-  remarks?: string
-): Promise<{ success: boolean; message: string; report?: Report }> {
-  return await apiFetch<{ success: boolean; message: string; report?: Report }>(`/api/staff/reports/${id}/resolve`, {
-    method: "POST",
-    body: JSON.stringify({ action, remarks }),
-  });
+// ==========================================
+// Notifications (Reporter Only)
+// ==========================================
+export async function apiGetNotifications(): Promise<{ notifications: NotificationItem[]; unread_count: number }> {
+  return await apiFetch<{ notifications: NotificationItem[]; unread_count: number }>(
+    "/api/notifications",
+    {},
+    { authRequired: true }
+  );
 }
 
-// ─── IN-APP NOTIFICATIONS ───────────────────────────────────────────
-
-export async function apiGetNotifications(): Promise<{ notifications: any[] }> {
-  return await apiFetch<{ notifications: any[] }>("/api/notifications");
+export async function apiMarkNotificationRead(id: number): Promise<{ success: boolean }> {
+  return await apiFetch<{ success: boolean }>(
+    `/api/notifications/${id}/read`,
+    { method: "PUT" },
+    { authRequired: true }
+  );
 }
 
 export async function apiMarkNotificationsRead(): Promise<{ success: boolean }> {
-  return await apiFetch<{ success: boolean }>("/api/notifications/read-all", { method: "PUT" });
+  return await apiFetch<{ success: boolean }>(
+    "/api/notifications/read-all",
+    { method: "PUT" },
+    { authRequired: true }
+  );
 }
 
-// ─── AI PREDICTION ─────────────────────────────────────────────────
-
-export async function apiPredict(description: string, locationId: number = 1): Promise<{
-  category: string | null;
-  confidence: number | null;
-  priority: string | null;
-  duplicate: { isDuplicate: boolean; matchScore: number; matchedReportId: number | null };
-  model_version?: string;
-  label?: string;
-  message?: string;
+// ==========================================
+// Public AI Assist & Campus Locations
+// ==========================================
+export async function apiPredict(
+  description: string,
+  locationId: number = 1
+): Promise<{
+  predicted_category: string | null;
+  category_confidence: number | null;
+  duplicate_score: number | null;
+  duplicate_of: number | null;
+  is_duplicate: boolean;
 }> {
   return await apiFetch("/api/ai/predict", {
     method: "POST",
@@ -192,58 +259,13 @@ export async function apiPredict(description: string, locationId: number = 1): P
   });
 }
 
-// ─── LOCATIONS & QR ────────────────────────────────────────────────
-
 export async function apiGetLocations(): Promise<{ locations: Location[] }> {
-  try {
-    return await apiFetch<{ locations: Location[] }>("/api/locations");
-  } catch {
-    return { locations: SAMPLE_LOCATIONS };
-  }
+  return await apiFetch<{ locations: Location[] }>("/api/locations");
 }
 
-export async function apiGetLocationByQr(token: string): Promise<{ location: Location }> {
-  return await apiFetch<{ location: Location }>(`/api/locations/qr/${token}`);
-}
-
-export async function apiGetQrCodes(): Promise<{ qr_codes: (Location & { qr_url: string; full_url: string })[] }> {
-  return await apiFetch<{ qr_codes: (Location & { qr_url: string; full_url: string })[] }>("/api/staff/qr-codes");
-}
-
-// ─── ADMIN & STAFF ─────────────────────────────────────────────────
-
-export async function apiGetStaff(): Promise<{ staff: StaffMember[] }> {
-  return await apiFetch<{ staff: StaffMember[] }>("/api/staff/staff");
-}
-
-export async function apiGetAdminUsers(): Promise<{ users: User[] }> {
-  return await apiFetch<{ users: User[] }>("/api/staff/users");
-}
-
-// ─── ANALYTICS ─────────────────────────────────────────────────────
-
-export async function apiGetAnalyticsSummary(): Promise<AnalyticsSummary> {
-  return await apiFetch<AnalyticsSummary>("/api/staff/analytics/summary");
-}
-
-export async function apiGetHeatmap(): Promise<{ locations: HeatmapLocation[] }> {
-  return await apiFetch<{ locations: HeatmapLocation[] }>("/api/staff/analytics/heatmap");
-}
-
-export async function apiGetCategories(): Promise<{ data: CategoryData[] }> {
-  return await apiFetch<{ data: CategoryData[] }>("/api/staff/analytics/categories");
-}
-
-export async function apiGetTrends(): Promise<{ data: TrendData[] }> {
-  return {
-    data: [
-      { date: "Mon", count: 2 },
-      { date: "Tue", count: 4 },
-      { date: "Wed", count: 3 },
-      { date: "Thu", count: 6 },
-      { date: "Fri", count: 5 },
-      { date: "Sat", count: 1 },
-      { date: "Sun", count: 2 },
-    ],
-  };
+export async function apiGetLocationByQr(token: string): Promise<{
+  location: Location;
+  active_issues?: Array<{ id: number; category: string; status: string; hours_ago?: number; created_at?: string }>;
+}> {
+  return await apiFetch(`/api/locations/qr/${encodeURIComponent(token)}`);
 }

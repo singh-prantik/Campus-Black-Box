@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { apiStaffLogin } from "@/lib/api";
+import { apiStaffLogin, setStaffToken, isValidStaffJwt } from "@/lib/staffApi";
 
 export default function StaffLoginPage() {
   const router = useRouter();
@@ -18,7 +18,11 @@ export default function StaffLoginPage() {
 
     try {
       const res = await apiStaffLogin(email, password);
-      localStorage.setItem("cbb_staff_token", res.token || res.access_token);
+      const jwt = res.token || res.access_token;
+      if (!jwt || !isValidStaffJwt(jwt)) {
+        throw new Error("Staff portal credentials required");
+      }
+      setStaffToken(jwt);
       if (res.user.role === "maintenance") {
         router.push("/staff/work-orders");
       } else {

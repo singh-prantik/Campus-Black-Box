@@ -2,16 +2,15 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import Navbar from "@/components/Navbar";
+import StaffNavbar from "@/components/StaffNavbar";
 import ReportCard from "@/components/ReportCard";
-import ReportDetailModal from "@/components/ReportDetailModal";
+import StaffReportModal from "@/components/StaffReportModal";
 import { Report } from "@/types";
-import { apiGetReports } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
+import { apiGetReports, useStaffSession } from "@/lib/staffApi";
 import { Wrench, ShieldAlert, ArrowRight } from "lucide-react";
 
 export default function TechnicianDashboard() {
-  const { user, isAuthenticated, loading: authLoading } = useAuth();
+  const { user, isAuthenticated, loading: authLoading } = useStaffSession();
   const isTechnicianOrAdmin =
     user?.role === "maintenance" || user?.role === "admin" || user?.role === "super_admin";
 
@@ -54,7 +53,7 @@ export default function TechnicianDashboard() {
   if (!isAuthenticated || !isTechnicianOrAdmin) {
     return (
       <div className="min-h-screen bg-bg text-text flex flex-col">
-        <Navbar />
+        <StaffNavbar />
         <main className="flex-1 flex items-center justify-center p-4">
           <div className="max-w-md w-full p-6 bg-surface border border-border rounded-card text-center space-y-4">
             <div className="w-12 h-12 rounded-full bg-border text-accent mx-auto flex items-center justify-center">
@@ -71,7 +70,7 @@ export default function TechnicianDashboard() {
             </div>
             <div className="pt-2 flex flex-col sm:flex-row gap-2 justify-center">
               <Link
-                href="/login?returnUrl=/dashboard/technician"
+                href="/staff/login"
                 className="px-4 py-2 rounded-input bg-text text-bg text-xs font-semibold hover:opacity-90 inline-flex items-center justify-center gap-1.5"
               >
                 Sign In as Technician
@@ -92,7 +91,7 @@ export default function TechnicianDashboard() {
 
   return (
     <div className="min-h-screen bg-bg text-text pb-16">
-      <Navbar />
+      <StaffNavbar />
 
       <main className="max-w-[1440px] mx-auto px-4 sm:px-6 pt-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6 border-b border-border pb-4">
@@ -136,6 +135,7 @@ export default function TechnicianDashboard() {
                 key={report.id}
                 report={report}
                 index={idx}
+                showPriority={true}
                 onClick={() => setSelectedReport(report)}
               />
             ))}
@@ -150,7 +150,7 @@ export default function TechnicianDashboard() {
       </main>
 
       {selectedReport && (
-        <ReportDetailModal
+        <StaffReportModal
           report={selectedReport}
           onClose={() => setSelectedReport(null)}
           onUpdate={(updated) => {

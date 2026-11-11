@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Report } from "@/types";
+import { apiFetchProtectedPhoto } from "@/lib/api";
 import { StatusBadge, PriorityBadge } from "./StatusBadge";
 import {
   MapPin,
@@ -22,6 +23,7 @@ interface ReportCardProps {
   report: Report;
   onClick?: () => void;
   index?: number;
+  showPriority?: boolean;
 }
 
 const categoryIcons: Record<string, React.ElementType> = {
@@ -48,18 +50,59 @@ function formatRelativeTime(dateString: string): string {
   return `${diffDays}d ago`;
 }
 
-export default function ReportCard({ report, onClick, index = 0 }: ReportCardProps) {
+export default function ReportCard({ report, onClick, index = 0, showPriority = false }: ReportCardProps) {
   const [imgError, setImgError] = useState(false);
+  const [resolvedImgUrl, setResolvedImgUrl] = useState<string | null>(null);
+  const rawPhoto = report.photo_path || report.photo_url || "";
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+    setImgError(false);
+
+    if (!rawPhoto) {
+      setResolvedImgUrl(null);
+      return;
+    }
+
+    if (rawPhoto.includes("/api/photos/")) {
+      apiFetchProtectedPhoto(rawPhoto)
+        .then((url) => {
+          if (!active) {
+            if (url && url.startsWith("blob:")) URL.revokeObjectURL(url);
+            return;
+          }
+          objectUrl = url;
+          setResolvedImgUrl(url);
+        })
+        .catch(() => {
+          if (active) setImgError(true);
+        });
+    } else {
+      setResolvedImgUrl(rawPhoto);
+    }
+
+    return () => {
+      active = false;
+      if (objectUrl && objectUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [rawPhoto]);
+
   const catKey = report.category?.toLowerCase() || "";
   const CategoryIcon = categoryIcons[catKey] || HelpCircle;
 
   // Format Location: "Block 3 · Room 302"
-  const locationString = report.location
-    ? `${report.location.block} · ${report.location.room}`
-    : "Campus location";
+  const blockName = report.location?.block || report.block;
+  const roomName = report.location?.room || report.room;
+  const locationString =
+    blockName && roomName
+      ? `${blockName} · ${roomName}`
+      : blockName || roomName || "Campus location";
 
   // Reporter Role
-  const reporterRole = report.reporter_role || report.reporter?.role || "Reporter";
+  const reporterRole = report.reporter_role || report.reporter?.role || "Student";
   const formattedRole =
     reporterRole.charAt(0).toUpperCase() + reporterRole.slice(1).toLowerCase();
 
@@ -84,12 +127,13 @@ export default function ReportCard({ report, onClick, index = 0 }: ReportCardPro
     >
       {/* 16:10 Thumbnail */}
       <div className="relative w-full aspect-[16/10] bg-bg border-b border-border overflow-hidden flex items-center justify-center">
-        {report.photo_url && !imgError ? (
+        {resolvedImgUrl && !imgError ? (
+          // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={report.photo_url}
+            src={resolvedImgUrl}
             alt={report.alt_text || report.title || "Incident thumbnail"}
             onError={() => setImgError(true)}
-            className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+            className="w-full h-full object-contain bg-white transition-transform duration-200 group-hover:scale-[1.02]"
             loading="lazy"
           />
         ) : (
@@ -116,10 +160,10 @@ export default function ReportCard({ report, onClick, index = 0 }: ReportCardPro
       {/* Card Content */}
       <div className="p-4 flex-1 flex flex-col justify-between">
         <div>
-          {/* Status & Priority Row */}
+          {/* Status Row (Priority shown only on staff triage views) */}
           <div className="flex items-center gap-2 mb-2 flex-wrap">
             <StatusBadge status={report.status} />
-            <PriorityBadge priority={report.priority} />
+            {showPriority && report.priority ? <PriorityBadge priority={report.priority} /> : null}
             <span className="text-xs text-muted ml-auto">{report.category}</span>
           </div>
 

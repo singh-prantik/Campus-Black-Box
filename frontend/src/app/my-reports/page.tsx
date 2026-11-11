@@ -2,114 +2,141 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { apiGetMyReports, apiGetReportHistory } from "@/lib/api";
+import Navbar from "@/components/Navbar";
+import ReportCard from "@/components/ReportCard";
+import ReportDetailModal from "@/components/ReportDetailModal";
+import { apiGetMyReports } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { Report } from "@/types";
+import { Plus, Lock, Inbox } from "lucide-react";
 
 export default function MyReportsPage() {
+  const { user, isAuthenticated, loading: authLoading } = useAuth();
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
-  const [history, setHistory] = useState<any[]>([]);
 
   useEffect(() => {
-    loadReports();
-  }, []);
-
-  async function loadReports() {
-    setLoading(true);
-    try {
-      const data = await apiGetMyReports();
-      setReports(data.reports || []);
-    } catch {
+    if (authLoading) return;
+    if (!isAuthenticated) {
       setReports([]);
-    } finally {
       setLoading(false);
+      return;
     }
-  }
 
-  async function openDetail(r: Report) {
-    setSelectedReport(r);
-    try {
-      const data = await apiGetReportHistory(r.id);
-      setHistory(data.history || []);
-    } catch {
-      setHistory([]);
-    }
-  }
+    let active = true;
+    setLoading(true);
+    setErrorMsg(null);
+    apiGetMyReports()
+      .then((data) => {
+        if (!active) return;
+        setReports(data.reports || []);
+      })
+      .catch((err: any) => {
+        if (!active) return;
+        setReports([]);
+        setErrorMsg(err?.message || "Failed to load your reports");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [authLoading, isAuthenticated, user?.id]);
 
   return (
-    <div style={{ maxWidth: 800, margin: "0 auto", padding: "32px 16px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
-        <div>
-          <h1 style={{ fontSize: 24, fontWeight: 700 }}>My Incident Reports</h1>
-          <p style={{ color: "var(--muted)", fontSize: 14 }}>Track the live status and timeline of your reported issues.</p>
-        </div>
-        <Link href="/report" style={{ padding: "8px 16px", background: "var(--accent)", color: "#fff", borderRadius: 8, textDecoration: "none", fontSize: 13, fontWeight: 600 }}>
-          + New Report
-        </Link>
-      </div>
+    <div className="min-h-screen bg-bg text-text flex flex-col">
+      <Navbar />
 
-      {loading ? (
-        <div style={{ textAlign: "center", padding: 48, color: "var(--muted)" }}>Loading your reports...</div>
-      ) : reports.length === 0 ? (
-        <div style={{ textAlign: "center", padding: 48, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12 }}>
-          <h3 style={{ fontSize: 16, fontWeight: 600 }}>No reports submitted yet</h3>
-          <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 4, marginBottom: 16 }}>Issues you report will appear here with live resolution status.</p>
-          <Link href="/report" style={{ padding: "8px 16px", background: "var(--accent)", color: "#fff", borderRadius: 8, textDecoration: "none", fontSize: 13 }}>
-            Report an Incident
-          </Link>
-        </div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {reports.map((r) => (
-            <div
-              key={r.id}
-              onClick={() => openDetail(r)}
-              style={{
-                background: "var(--surface)",
-                border: "1px solid var(--border)",
-                borderRadius: 12,
-                padding: 16,
-                cursor: "pointer",
-              }}
+      <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-8 space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-text">My Incident Reports</h1>
+            <p className="text-xs text-muted mt-1">
+              Track the live status, timeline, and resolution updates for issues you submitted.
+            </p>
+          </div>
+          {isAuthenticated && (
+            <Link
+              href="/report"
+              className="px-4 py-2 rounded-input bg-accent text-white text-xs font-semibold hover:bg-accent-hover inline-flex items-center gap-1.5"
             >
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                <span style={{ fontWeight: 700 }}>#{r.id} · {r.location?.block || "Block 1"} · {r.location?.room || "Room"}</span>
-                <span style={{ fontSize: 12, textTransform: "capitalize", fontWeight: 600 }}>{r.status.replace("_", " ")}</span>
-              </div>
-              <p style={{ fontSize: 13, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {r.description}
+              <Plus className="w-3.5 h-3.5 stroke-[2]" />
+              New Report
+            </Link>
+          )}
+        </div>
+
+        {authLoading ? (
+          <div className="p-12 text-center text-xs text-muted bg-surface border border-border rounded-card">
+            Validating reporter session...
+          </div>
+        ) : !isAuthenticated ? (
+          <div className="max-w-md mx-auto p-8 bg-surface border border-border rounded-card text-center space-y-4">
+            <div className="w-12 h-12 rounded-full bg-bg border border-border text-accent mx-auto flex items-center justify-center">
+              <Lock className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-text">Sign in to view your reports</h2>
+              <p className="text-xs text-muted mt-1">
+                Sign in with your student or faculty account to view your submitted incidents and timelines.
               </p>
             </div>
-          ))}
-        </div>
-      )}
-
-      {selectedReport && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-          <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 12, padding: 24, maxWidth: 500, width: "90%" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-              <h3 style={{ fontSize: 18, fontWeight: 700 }}>Report #{selectedReport.id}</h3>
-              <button onClick={() => setSelectedReport(null)} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 16 }}>✕</button>
-            </div>
-            <p style={{ fontSize: 13, background: "var(--surface)", padding: 12, borderRadius: 8, marginBottom: 16 }}>
-              {selectedReport.description}
+            <Link
+              href="/login?returnUrl=/my-reports"
+              className="inline-flex items-center justify-center px-5 py-2.5 rounded-input bg-accent text-white text-xs font-semibold hover:bg-accent-hover"
+            >
+              Sign In to Reporter Portal
+            </Link>
+          </div>
+        ) : errorMsg ? (
+          <div className="p-6 bg-surface border border-border rounded-card text-xs text-red-500">
+            {errorMsg}
+          </div>
+        ) : loading ? (
+          <div className="p-12 text-center text-xs text-muted bg-surface border border-border rounded-card">
+            Loading your reports...
+          </div>
+        ) : reports.length === 0 ? (
+          <div className="p-12 text-center bg-surface border border-border rounded-card space-y-3">
+            <Inbox className="w-8 h-8 text-muted mx-auto stroke-[1.5]" />
+            <h2 className="text-base font-semibold text-text">No reports submitted yet</h2>
+            <p className="text-xs text-muted">
+              Issues you report will appear here with live resolution progress.
             </p>
-            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", marginBottom: 8 }}>
-              Status History Timeline
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 180, overflowY: "auto" }}>
-              {history.map((h, i) => (
-                <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "6px 10px", background: "var(--surface)", borderRadius: 6 }}>
-                  <span>{h.from_status ? `${h.from_status} → ${h.to_status}` : `Submitted as ${h.to_status}`}</span>
-                  <span style={{ color: "var(--muted)" }}>{new Date(h.changed_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-                </div>
-              ))}
+            <div className="pt-2">
+              <Link
+                href="/report"
+                className="inline-flex px-4 py-2 rounded-input bg-accent text-white text-xs font-semibold hover:bg-accent-hover"
+              >
+                Report an Incident
+              </Link>
             </div>
           </div>
-        </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {reports.map((report, i) => (
+              <ReportCard
+                key={report.id}
+                report={report}
+                index={i}
+                showPriority={false}
+                onClick={() => setSelectedReport(report)}
+              />
+            ))}
+          </div>
+        )}
+      </main>
+
+      {selectedReport && (
+        <ReportDetailModal
+          report={selectedReport}
+          onClose={() => setSelectedReport(null)}
+        />
       )}
     </div>
   );
 }
-

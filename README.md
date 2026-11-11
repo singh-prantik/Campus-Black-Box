@@ -2,7 +2,7 @@
 
 > **AI-Powered Campus Problem Intelligence and Resolution System**  
 > *B.Tech CSE (AI-ML) PBL Project | Mini Hackathon Edition*  
-> Note: public/ is the canonical prototype UI; frontend/ is a frozen reference and may lag.
+> Note: Next.js frontend lives in `frontend/` (deployed on Vercel); `server.js` is the Node 22 REST backend (deployed on Render) which also serves `public/`.
 
 ---
 
@@ -129,8 +129,12 @@ Render natively runs continuous Node.js processes, making it the ideal host for 
    - In **Environment Variables**, add:
      - `NODE_VERSION`: `22.5.0` *(Required for native `node:sqlite`)*
      - `DEMO_MODE`: `true`
-     - `JWT_SECRET`: Any 32-character secret string
+     - `JWT_SECRET`: Required in `production` (at least 32 chars — server refuses to start in production if missing)
+     - `ALLOWED_ORIGIN`: `https://campus-black-box-delta.vercel.app` *(Vercel origin allowed by CORS with `Authorization` header & `OPTIONS` preflight)*
    - Click **Create Web Service**. Your service will be live on Render's HTTPS URL within 2 minutes.
+
+> **Important Limitation — Ephemeral Disk on Render Free Tier:**
+> On Render's free web service tier, local disk is ephemeral and resets on every deploy, sleep/wake cycle, or container restart. Both `campus_blackbox.db` (SQLite database) and `uploads/` (uploaded evidence photos) live on local disk unless you attach a Render Persistent Disk or move uploads/DB to external object/database storage. When the database boots empty after a reset, `server.js` automatically re-seeds demo users, locations, and sample reports so the app never boots blank, and `GET /api/health` exposes `{ status, version, commit, demo_mode }` to confirm the running build.
 
 ---
 
@@ -163,10 +167,10 @@ To deploy the Next.js client (`frontend/`):
 
 ## 🧪 Verification & Acceptance Testing
 
-The test suite runs 40 automated criteria covering authentication, audience separation, state machines, duplicate detection (0.55 threshold), safety overrides, priority privacy, and triage analytics.
+The test suite covers authentication, audience separation, state machines, duplicate detection (0.55 threshold), safety overrides, priority privacy, triage analytics, portal token isolation, reporter allowlists, and photo byte preservation (`AC1.1`–`AC6.9` and `AC8.x`).
 
 ```bash
-# Run all 40 automated acceptance tests
+# Run all automated acceptance tests
 node test_workflow.js
 ```
 

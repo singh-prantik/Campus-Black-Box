@@ -79,11 +79,11 @@ async function apiReporterFetch(url, options = {}) {
   }
 
   const res = await fetch(url, { ...options, headers });
-  if (res.status === 401) {
+  if (res.status === 401 || res.status === 403) {
     clearReporterToken();
     currentReporterUser = null;
     updateReporterUI();
-    throw new Error("Session expired. Please sign in again.");
+    throw new Error("Your session is not valid for reporting. Please sign in again.");
   }
   return res;
 }
@@ -105,6 +105,13 @@ async function checkReporterAuth() {
       return false;
     }
     const data = await res.json();
+    const validRole = data.user && (data.user.role === "student" || data.user.role === "faculty");
+    if (!validRole || data.user.aud !== "reporter") {
+      clearReporterToken();
+      currentReporterUser = null;
+      updateReporterUI();
+      return false;
+    }
     currentReporterUser = data.user;
     updateReporterUI();
     fetchNotifications();
@@ -115,6 +122,19 @@ async function checkReporterAuth() {
     updateReporterUI();
     return false;
   }
+}
+
+if (typeof window !== "undefined") {
+  setInterval(() => {
+    if (getReporterToken()) {
+      void checkReporterAuth();
+    }
+  }, 60000);
+  window.addEventListener("focus", () => {
+    if (getReporterToken()) {
+      void checkReporterAuth();
+    }
+  });
 }
 
 function updateReporterUI() {
@@ -510,6 +530,15 @@ function handlePhotoSelection(e) {
   errDiv.style.display = "none";
 
   if (!file) {
+    clearSelectedPhoto();
+    return;
+  }
+
+  const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
+  if (file.type && !allowedTypes.includes(file.type.toLowerCase())) {
+    errDiv.textContent = "Unsupported file type. Please select a PNG, JPEG, or WebP image.";
+    errDiv.style.display = "block";
+    e.target.value = "";
     clearSelectedPhoto();
     return;
   }

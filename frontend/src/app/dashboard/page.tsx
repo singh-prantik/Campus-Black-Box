@@ -6,65 +6,109 @@ import Navbar from "@/components/Navbar";
 import ReportCard from "@/components/ReportCard";
 import ReportDetailModal from "@/components/ReportDetailModal";
 import { Report } from "@/types";
-import { apiGetReports } from "@/lib/api";
-import { Plus, Inbox } from "lucide-react";
+import { apiGetMyReports } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { Plus, Inbox, Lock } from "lucide-react";
 
-export default function ReporterDashboard() {
+export default function ReporterDashboardPage() {
+  const { user, isAuthenticated, isReporter, loading: authLoading } = useAuth();
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
 
   useEffect(() => {
-    apiGetReports()
-      .then((res) => setReports(res.reports))
-      .finally(() => setLoading(false));
-  }, []);
+    if (authLoading) return;
+    if (!isAuthenticated || !isReporter) {
+      setReports([]);
+      setLoading(false);
+      return;
+    }
+
+    let active = true;
+    setLoading(true);
+    apiGetMyReports()
+      .then((res) => {
+        if (active) setReports(res.reports || []);
+      })
+      .catch(() => {
+        if (active) setReports([]);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [authLoading, isAuthenticated, isReporter, user?.id]);
 
   return (
-    <div className="min-h-screen bg-bg text-text pb-16">
+    <div className="min-h-screen bg-bg text-text flex flex-col">
       <Navbar />
 
-      <main className="max-w-[1440px] mx-auto px-4 sm:px-6 pt-6">
-        <div className="flex items-center justify-between border-b border-border pb-4 mb-6">
+      <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-8 space-y-6">
+        <div className="flex items-center justify-between gap-4">
           <div>
-            <span className="text-[11px] font-semibold text-accent uppercase tracking-wider">
-              Reporter Portal
-            </span>
-            <h1 className="text-xl font-bold text-text mt-0.5">My Reported Incidents</h1>
+            <h1 className="text-xl font-bold text-text">Reporter Dashboard</h1>
+            <p className="text-xs text-muted mt-1">
+              Your submitted campus incident reports and live repair status.
+            </p>
           </div>
-          <Link
-            href="/report/1"
-            className="flex items-center gap-1.5 h-9 px-3 rounded-input bg-text text-bg text-xs font-semibold hover:opacity-90"
-          >
-            <Plus className="w-3.5 h-3.5 stroke-[1.5]" />
-            Report incident
-          </Link>
+          {isAuthenticated && (
+            <Link
+              href="/report"
+              className="px-4 py-2 rounded-input bg-accent text-white text-xs font-semibold hover:bg-accent-hover inline-flex items-center gap-1.5"
+            >
+              <Plus className="w-4 h-4 stroke-[2]" />
+              New Report
+            </Link>
+          )}
         </div>
 
-        {loading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {[1, 2, 3].map((n) => (
-              <div
-                key={n}
-                className="animate-skeleton bg-surface border border-border rounded-card aspect-[16/10]"
-              />
-            ))}
+        {authLoading ? (
+          <div className="p-10 text-center text-xs text-muted bg-surface border border-border rounded-card">
+            Validating reporter session...
           </div>
-        ) : reports.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {reports.map((report, idx) => (
+        ) : !isAuthenticated ? (
+          <div className="max-w-md mx-auto p-8 bg-surface border border-border rounded-card text-center space-y-4">
+            <Lock className="w-8 h-8 text-accent mx-auto" />
+            <h2 className="text-base font-bold text-text">Sign in Required</h2>
+            <p className="text-xs text-muted">
+              Sign in with your Student or Faculty account to access your reports.
+            </p>
+            <Link
+              href="/login?returnUrl=/dashboard"
+              className="inline-flex px-5 py-2.5 rounded-input bg-accent text-white text-xs font-semibold hover:bg-accent-hover"
+            >
+              Sign In
+            </Link>
+          </div>
+        ) : loading ? (
+          <div className="p-10 text-center text-xs text-muted bg-surface border border-border rounded-card">
+            Loading reports...
+          </div>
+        ) : reports.length === 0 ? (
+          <div className="p-12 text-center bg-surface border border-border rounded-card space-y-3">
+            <Inbox className="w-8 h-8 text-muted mx-auto" />
+            <h2 className="text-sm font-semibold text-text">No reports submitted yet</h2>
+            <Link
+              href="/report"
+              className="inline-flex px-4 py-2 rounded-input bg-accent text-white text-xs font-semibold hover:bg-accent-hover"
+            >
+              Report an Incident
+            </Link>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {reports.map((report, i) => (
               <ReportCard
                 key={report.id}
                 report={report}
-                index={idx}
+                index={i}
+                showPriority={false}
                 onClick={() => setSelectedReport(report)}
               />
             ))}
-          </div>
-        ) : (
-          <div className="py-16 text-center bg-surface border border-border rounded-card">
-            <Inbox className="w-10 h-10 text-muted mx-auto stroke-[1.5] mb-2" />
-            <p className="text-sm font-semibold text-text">No incidents reported yet</p>
           </div>
         )}
       </main>
@@ -73,12 +117,6 @@ export default function ReporterDashboard() {
         <ReportDetailModal
           report={selectedReport}
           onClose={() => setSelectedReport(null)}
-          onUpdate={(updated) => {
-            setReports((prev) =>
-              prev.map((r) => (r.id === updated.id ? updated : r))
-            );
-            setSelectedReport(updated);
-          }}
         />
       )}
     </div>

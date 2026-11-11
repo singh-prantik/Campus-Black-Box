@@ -46,7 +46,7 @@ declare namespace React {
     metaKey: boolean;
   }
   export interface ChangeEvent<T = any> extends SyntheticEvent<T> {
-    target: T & { value: string };
+    target: T & { value: string; files?: FileList | null };
   }
 }
 
@@ -177,7 +177,10 @@ declare module "lucide-react" {
   export const QrCode: Icon;
   export const Info: Icon;
   export const BarChart3: Icon;
-  export const [key: string]: any;
+  export const Upload: Icon;
+  export const Image: Icon;
+  export const LogOut: Icon;
+  export const ClipboardList: Icon;
 }
 
 declare module "next" {

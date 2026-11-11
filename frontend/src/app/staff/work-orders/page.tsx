@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { apiGetReports, apiUpdateReport, apiResolveReport } from "@/lib/api";
+import Link from "next/link";
+import StaffNavbar from "@/components/StaffNavbar";
+import { apiGetReports, apiUpdateReport, apiResolveReport, useStaffSession } from "@/lib/staffApi";
 import { Report } from "@/types";
 
 export default function TechnicianWorkOrdersPage() {
+  const { isAuthenticated, loading: authLoading } = useStaffSession();
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);
   const [resolveModalReport, setResolveModalReport] = useState<Report | null>(null);
@@ -12,8 +15,12 @@ export default function TechnicianWorkOrdersPage() {
   const [remarksText, setRemarksText] = useState("");
 
   useEffect(() => {
+    if (authLoading || !isAuthenticated) {
+      setLoading(false);
+      return;
+    }
     loadWorkOrders();
-  }, []);
+  }, [authLoading, isAuthenticated]);
 
   async function loadWorkOrders() {
     setLoading(true);
@@ -49,8 +56,36 @@ export default function TechnicianWorkOrdersPage() {
     }
   }
 
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-bg text-text">
+        <StaffNavbar />
+        <div className="p-12 text-center text-xs text-muted">Validating staff session...</div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-bg text-text">
+        <StaffNavbar />
+        <div style={{ maxWidth: 440, margin: "64px auto", padding: 32, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, textAlign: "center" }}>
+          <h1 style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Staff Sign-In Required</h1>
+          <p style={{ color: "var(--muted)", fontSize: 13, marginBottom: 16 }}>
+            Sign in with your technician or admin credentials to manage work orders.
+          </p>
+          <Link href="/staff/login" style={{ padding: "8px 16px", background: "var(--accent)", color: "#fff", borderRadius: 8, textDecoration: "none", fontSize: 13, fontWeight: 600 }}>
+            Staff Sign In
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ maxWidth: 880, margin: "0 auto", padding: "32px 16px" }}>
+    <div className="min-h-screen bg-bg text-text">
+      <StaffNavbar />
+      <div style={{ maxWidth: 880, margin: "0 auto", padding: "32px 16px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700 }}>My Assigned Work Orders</h1>
@@ -134,6 +169,7 @@ export default function TechnicianWorkOrdersPage() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

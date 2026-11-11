@@ -1,10 +1,11 @@
-export type UserRole = "admin" | "reporter" | "student" | "faculty" | "technician";
+export type UserRole = "admin" | "super_admin" | "maintenance" | "reporter" | "student" | "faculty" | "technician";
 
 export interface User {
   id: number;
   name?: string;
   email: string;
   role: UserRole | string;
+  aud?: "reporter" | "staff" | string;
   department?: string;
 }
 
@@ -19,6 +20,25 @@ export interface Location {
   qr_token?: string;
 }
 
+export interface StatusHistoryItem {
+  from_status: string | null;
+  to_status: string;
+  changed_at: string;
+}
+
+export interface ReportUpdateItem {
+  text: string;
+  created_at: string;
+}
+
+export interface NotificationItem {
+  id: number;
+  report_id: number | null;
+  message: string;
+  read_at: string | null;
+  created_at: string;
+}
+
 export interface Report {
   id: number;
   title?: string;
@@ -27,18 +47,25 @@ export interface Report {
   location_id?: number;
   category: string;
   suggested_category?: string;
-  priority: "low" | "medium" | "high" | "critical";
-  status: "pending" | "assigned" | "in_progress" | "resolved";
+  priority?: "low" | "medium" | "high" | "critical";
+  status: "submitted" | "pending" | "assigned" | "in_progress" | "resolved";
   photo_url: string | null;
+  photo_path?: string | null;
   alt_text?: string;
+  block?: string | null;
+  room?: string | null;
+  location_type?: string | null;
   assigned_to?: number | null;
   similar_count?: number;
   reporter_role?: "Student" | "Faculty" | "Technician" | string;
   created_at: string;
-  updated_at?: string;
+  updated_at?: string | null;
   resolved_at?: string | null;
+  resolution_action?: string | null;
+  timeline?: StatusHistoryItem[];
+  updates?: ReportUpdateItem[];
   reporter?: User;
-  location?: Location;
+  location?: Partial<Location> & { block?: string | null; room?: string | null; location_type?: string | null };
   assignee?: User;
   resolutions?: Resolution[];
   predictions?: Prediction[];

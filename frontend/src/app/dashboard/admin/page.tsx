@@ -2,9 +2,9 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
-import Navbar from "@/components/Navbar";
+import StaffNavbar from "@/components/StaffNavbar";
 import { StatusBadge, PriorityBadge } from "@/components/StatusBadge";
-import ReportDetailModal from "@/components/ReportDetailModal";
+import StaffReportModal from "@/components/StaffReportModal";
 import { Report, StaffMember, AnalyticsSummary } from "@/types";
 import {
   apiGetReports,
@@ -12,8 +12,8 @@ import {
   apiGetAnalyticsSummary,
   apiUpdateReport,
   apiResolveReport,
-} from "@/lib/api";
-import { useAuth } from "@/lib/auth";
+  useStaffSession,
+} from "@/lib/staffApi";
 import toast from "react-hot-toast";
 import {
   Search,
@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 
 export default function AdminDashboardPage() {
-  const { user, isAuthenticated, loading: authLoading } = useAuth();
+  const { user, isAuthenticated, loading: authLoading } = useStaffSession();
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
 
   const [reports, setReports] = useState<Report[]>([]);
@@ -79,7 +79,7 @@ export default function AdminDashboardPage() {
   const filteredReports = useMemo(() => {
     return reports.filter((r) => {
       if (statusFilter && r.status !== statusFilter) return false;
-      if (blockFilter && r.location?.block !== blockFilter) return false;
+      if (blockFilter && (r.location?.block || r.block) !== blockFilter) return false;
       if (categoryFilter && r.category !== categoryFilter) return false;
       if (priorityFilter && r.priority !== priorityFilter) return false;
       if (search) {
@@ -87,7 +87,7 @@ export default function AdminDashboardPage() {
         const matches =
           r.title?.toLowerCase().includes(q) ||
           r.description.toLowerCase().includes(q) ||
-          r.location?.room.toLowerCase().includes(q) ||
+          (r.location?.room || r.room || "").toLowerCase().includes(q) ||
           `#${r.id}`.includes(q);
         if (!matches) return false;
       }
@@ -183,7 +183,7 @@ export default function AdminDashboardPage() {
   if (!isAuthenticated || !isAdmin) {
     return (
       <div className="min-h-screen bg-bg text-text flex flex-col">
-        <Navbar />
+        <StaffNavbar />
         <main className="flex-1 flex items-center justify-center p-4">
           <div className="max-w-md w-full p-6 bg-surface border border-border rounded-card text-center space-y-4">
             <div className="w-12 h-12 rounded-full bg-border text-accent mx-auto flex items-center justify-center">
@@ -200,7 +200,7 @@ export default function AdminDashboardPage() {
             </div>
             <div className="pt-2 flex flex-col sm:flex-row gap-2 justify-center">
               <Link
-                href="/login?returnUrl=/dashboard/admin"
+                href="/staff/login"
                 className="px-4 py-2 rounded-input bg-text text-bg text-xs font-semibold hover:opacity-90 inline-flex items-center justify-center gap-1.5"
               >
                 Sign In as Admin
@@ -221,7 +221,7 @@ export default function AdminDashboardPage() {
 
   return (
     <div className="min-h-screen bg-bg text-text pb-16">
-      <Navbar />
+      <StaffNavbar />
 
       <main className="max-w-[1440px] mx-auto px-4 sm:px-6 pt-6 space-y-6">
         {/* Header */}
@@ -457,7 +457,7 @@ export default function AdminDashboardPage() {
                         </td>
                         <td className="p-3 font-medium">{report.category}</td>
                         <td className="p-3">
-                          <PriorityBadge priority={report.priority} />
+                          <PriorityBadge priority={report.priority || "medium"} />
                         </td>
                         <td className="p-3">
                           <StatusBadge status={report.status} />
@@ -702,7 +702,7 @@ export default function AdminDashboardPage() {
 
       {/* Detailed Modal */}
       {selectedReport && (
-        <ReportDetailModal
+        <StaffReportModal
           report={selectedReport}
           onClose={() => setSelectedReport(null)}
           onUpdate={(updated) => {

@@ -7,6 +7,7 @@ interface StatusBadgeProps {
 }
 
 const statusLabels: Record<string, string> = {
+  submitted: "Submitted",
   pending: "Pending",
   assigned: "Assigned",
   in_progress: "In progress",
@@ -66,7 +67,7 @@ export function StatusBadge({ status }: StatusBadgeProps) {
 }
 
 interface PriorityBadgeProps {
-  priority: "low" | "medium" | "high" | "critical" | string;
+  priority?: "low" | "medium" | "high" | "critical" | string;
 }
 
 const priorityLabels: Record<string, string> = {
@@ -77,8 +78,8 @@ const priorityLabels: Record<string, string> = {
 };
 
 export function PriorityBadge({ priority }: PriorityBadgeProps) {
-  const normalized = priority?.toLowerCase() || "medium";
-  const label = priorityLabels[normalized] || priority;
+  const normalized = (priority || "medium").toLowerCase();
+  const label = priorityLabels[normalized] || priority || "Medium";
 
   const styleMap: Record<string, { bg: string; text: string; border: string }> = {
     critical: {

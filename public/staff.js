@@ -52,15 +52,15 @@ function updateThemeIcons(theme) {
 // AUTHENTICATION & SESSION
 // -------------------------------------------------------------
 function getStaffToken() {
-  return localStorage.getItem(TOKEN_KEY);
+  return sessionStorage.getItem(TOKEN_KEY);
 }
 
 function setStaffToken(token) {
-  localStorage.setItem(TOKEN_KEY, token);
+  sessionStorage.setItem(TOKEN_KEY, token);
 }
 
 function clearStaffToken() {
-  localStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(TOKEN_KEY);
 }
 
 async function apiStaffFetch(url, options = {}) {
@@ -74,11 +74,11 @@ async function apiStaffFetch(url, options = {}) {
   }
 
   const res = await fetch(url, { ...options, headers });
-  if (res.status === 401) {
+  if (res.status === 401 || res.status === 403) {
     clearStaffToken();
     currentStaffUser = null;
     showStaffLoginView();
-    throw new Error("Session expired. Please sign in again.");
+    throw new Error("Staff session invalid or expired. Please sign in again.");
   }
   return res;
 }
@@ -93,14 +93,22 @@ async function checkStaffAuth() {
   try {
     const res = await apiStaffFetch("/api/staff/auth/me");
     if (!res.ok) {
+      clearStaffToken();
       showStaffLoginView();
       return false;
     }
     const data = await res.json();
+    if (!data.user || data.user.aud !== "staff") {
+      clearStaffToken();
+      currentStaffUser = null;
+      showStaffLoginView();
+      return false;
+    }
     currentStaffUser = data.user;
     updateStaffHeaderUI();
     return true;
   } catch (err) {
+    clearStaffToken();
     showStaffLoginView();
     return false;
   }

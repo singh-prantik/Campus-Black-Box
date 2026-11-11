@@ -4,14 +4,13 @@ import { useState, useEffect, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
+import PhotoUploadField from "@/components/PhotoUploadField";
 import { apiGetLocationByQr, apiCreateReport, apiPredict } from "@/lib/api";
 import { Location } from "@/types";
 import { useAuth } from "@/lib/auth";
 import toast from "react-hot-toast";
 import {
   MapPin,
-  X,
-  Camera,
   ArrowLeft,
   Sparkles,
   AlertTriangle,
@@ -134,7 +133,7 @@ export default function QrReportPage() {
         description,
         location_id: location.id,
         category: selectedCategory || undefined,
-        photo_url: photoPreview || undefined,
+        photo_data: photoPreview || undefined,
       });
       setSubmittedId(res.report.id);
       toast.success(`Incident #${res.report.id} catalogued`);
@@ -250,26 +249,17 @@ export default function QrReportPage() {
               </p>
             </div>
             <div className="pt-2 flex flex-col gap-2">
-              {user.role === "admin" || user.role === "super_admin" ? (
-                <Link
-                  href="/dashboard/admin"
-                  className="w-full py-2 rounded-input bg-text text-bg text-xs font-semibold hover:opacity-90"
-                >
-                  Go to Admin Triage
-                </Link>
-              ) : (
-                <Link
-                  href="/dashboard/technician"
-                  className="w-full py-2 rounded-input bg-text text-bg text-xs font-semibold hover:opacity-90"
-                >
-                  Go to Assigned Work Orders
-                </Link>
-              )}
+              <Link
+                href="/staff/login"
+                className="w-full py-2 rounded-input bg-text text-bg text-xs font-semibold hover:opacity-90"
+              >
+                Staff Portal Sign In
+              </Link>
               <Link
                 href="/"
                 className="w-full py-2 rounded-input border border-border bg-bg text-text text-xs font-semibold hover:bg-border/30"
               >
-                Public incident feed
+                Back to Home
               </Link>
             </div>
           </div>
@@ -305,10 +295,10 @@ export default function QrReportPage() {
             </div>
             <div className="pt-2 flex justify-center gap-3">
               <Link
-                href="/dashboard"
+                href="/my-reports"
                 className="px-4 py-2 rounded-input bg-text text-bg text-xs font-semibold hover:opacity-90"
               >
-                View my incidents
+                View My Reports
               </Link>
               <Link
                 href="/"
@@ -450,41 +440,12 @@ export default function QrReportPage() {
                 </div>
               </div>
 
-              {/* Photo Evidence Preview */}
-              <div>
-                <label className="block text-xs font-semibold text-text mb-1.5">
-                  Photo Evidence (Optional)
-                </label>
-                {photoPreview ? (
-                  <div className="relative w-full aspect-[16/10] max-h-48 rounded-input overflow-hidden border border-border bg-bg">
-                    <img
-                      src={photoPreview}
-                      alt="Attached evidence preview"
-                      className="w-full h-full object-cover"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setPhotoPreview(null)}
-                      className="absolute top-2 right-2 p-1 rounded-full bg-surface border border-border text-text hover:bg-bg"
-                    >
-                      <X className="w-4 h-4 stroke-[1.5]" />
-                    </button>
-                  </div>
-                ) : (
-                  <div
-                    onClick={() => {
-                      setPhotoPreview("/samples/projector.webp");
-                      toast.success("Sample photo attached");
-                    }}
-                    className="border border-dashed border-border rounded-input p-5 text-center cursor-pointer hover:border-accent transition-colors bg-bg"
-                  >
-                    <Camera className="w-5 h-5 text-muted mx-auto stroke-[1.5] mb-1" />
-                    <div className="text-xs font-medium text-text">
-                      Attach photo evidence (optional)
-                    </div>
-                  </div>
-                )}
-              </div>
+              {/* Real Photo Evidence Upload */}
+              <PhotoUploadField
+                value={photoPreview}
+                onChange={setPhotoPreview}
+                disabled={submitting}
+              />
 
               {/* Submit Button */}
               <button

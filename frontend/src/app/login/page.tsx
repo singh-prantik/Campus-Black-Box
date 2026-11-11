@@ -25,10 +25,10 @@ function LoginForm() {
     try {
       const user = await login(email, password);
       toast.success(`Signed in as ${user.name}`);
-      if (returnUrl && !returnUrl.startsWith("/staff")) {
+      if (returnUrl && returnUrl.startsWith("/") && !returnUrl.startsWith("//") && !returnUrl.startsWith("/staff")) {
         router.push(returnUrl);
       } else {
-        router.push("/report");
+        router.push("/my-reports");
       }
     } catch (err: any) {
       const msg = err.message || "Failed to sign in. Verify email and password.";
@@ -58,7 +58,7 @@ function LoginForm() {
         </div>
         <h1 className="text-center text-xl font-bold text-text">Sign in to your account</h1>
         <p className="text-center text-xs text-muted mt-1">
-          Role-authenticated access for student reporters, technicians and administrators
+          Reporter portal sign-in for students and faculty
         </p>
       </div>
 

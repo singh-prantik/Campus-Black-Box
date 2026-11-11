@@ -5,14 +5,16 @@
  * Tests AC1.1 to AC5.10 (31 Automated Acceptance Criteria).
  */
 
-const { handleRequest, db, seedData, validateReturnUrl } = require("./server.js");
+const { handleRequest, db, seedData, validateReturnUrl, validateStartupConfig } = require("./server.js");
 const { Readable } = require("node:stream");
 const { EventEmitter } = require("node:events");
 const fs = require("node:fs");
 const path = require("node:path");
+const zlib = require("node:zlib");
+const { spawnSync } = require("node:child_process");
 
 // In-process mock request helper
-function request(method, path, body = null, token = null) {
+function request(method, reqPath, body = null, token = null, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const req = new Readable({
       read() {
@@ -24,10 +26,11 @@ function request(method, path, body = null, token = null) {
     });
 
     req.method = method;
-    req.url = path;
+    req.url = reqPath;
     req.headers = {
       host: "localhost:3000",
-      "content-type": "application/json"
+      "content-type": "application/json",
+      ...extraHeaders
     };
     if (token) {
       req.headers["authorization"] = `Bearer ${token}`;
@@ -59,12 +62,13 @@ function request(method, path, body = null, token = null) {
       }
       end(chunk) {
         if (chunk) this._chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        const data = Buffer.concat(this._chunks).toString("utf8");
+        const rawBuffer = Buffer.concat(this._chunks);
+        const data = rawBuffer.toString("utf8");
         try {
           const parsed = data ? JSON.parse(data) : {};
-          resolve({ status: this.statusCode, headers: this.headers, body: parsed, raw: data });
+          resolve({ status: this.statusCode, headers: this.headers, body: parsed, raw: data, rawBuffer });
         } catch {
-          resolve({ status: this.statusCode, headers: this.headers, body: data, raw: data });
+          resolve({ status: this.statusCode, headers: this.headers, body: data, raw: data, rawBuffer });
         }
       }
     }
@@ -732,6 +736,245 @@ async function runTests() {
     blockSummaryReporter.status === 403,
     "AC6.9",
     "Block summary matches SQLite counts, displays FR-25 analytical disclaimer, and blocks reporter access with 403"
+  );
+
+  // -------------------------------------------------------------
+  // GOAL 8: Production Bug Regression Suite (AC8.1 - AC8.5)
+  // -------------------------------------------------------------
+  console.log("\n--- Goal 8: Production Isolation, Allowlist, Photo & Health Tests (AC8.1 - AC8.5) ---");
+
+  // AC8.1: Reporter UI code never reads cbb_staff_token, generic "token", or fabricates sample photos
+  const reporterUiFiles = [
+    "frontend/src/lib/api.ts",
+    "frontend/src/lib/auth.tsx",
+    "frontend/src/components/Navbar.tsx",
+    "frontend/src/components/PhotoUploadField.tsx",
+    "frontend/src/components/ReportCard.tsx",
+    "frontend/src/components/ReportDetailModal.tsx",
+    "frontend/src/app/page.tsx",
+    "frontend/src/app/dashboard/page.tsx",
+    "frontend/src/app/my-reports/page.tsx",
+    "frontend/src/app/login/page.tsx",
+    "frontend/src/app/register/page.tsx",
+    "frontend/src/app/report/[locationId]/page.tsx",
+    "frontend/src/app/r/[token]/page.tsx",
+    "public/app.js"
+  ];
+  const badReporterRefs = [];
+  for (const relPath of reporterUiFiles) {
+    const content = fs.readFileSync(path.join(__dirname, relPath), "utf8");
+    if (content.includes("cbb_staff_token")) badReporterRefs.push(`${relPath}:cbb_staff_token`);
+    if (/getItem\(["']token["']\)|setItem\(["']token["']/.test(content)) badReporterRefs.push(`${relPath}:generic-token`);
+    if (content.includes("handleSimulatePhoto") || content.includes("projector.webp")) badReporterRefs.push(`${relPath}:fake-photo`);
+    if (content.includes("/api/staff/")) badReporterRefs.push(`${relPath}:staff-endpoint`);
+  }
+  const staffApiSrc = fs.readFileSync(path.join(__dirname, "frontend/src/lib/staffApi.ts"), "utf8");
+  const publicStaffSrc = fs.readFileSync(path.join(__dirname, "public/staff.js"), "utf8");
+  assert(
+    badReporterRefs.length === 0 &&
+    staffApiSrc.includes("sessionStorage.getItem(STAFF_TOKEN_KEY)") &&
+    !staffApiSrc.includes("localStorage.getItem") &&
+    !staffApiSrc.includes("localStorage.setItem") &&
+    publicStaffSrc.includes("sessionStorage.getItem(TOKEN_KEY)") &&
+    !publicStaffSrc.includes("localStorage.getItem(TOKEN_KEY)") &&
+    !publicStaffSrc.includes("localStorage.setItem(TOKEN_KEY)"),
+    "AC8.1",
+    `Reporter UI never reads cbb_staff_token/generic token or fabricates photos (violations: ${badReporterRefs.join(",") || "none"}); staff tokens stay in sessionStorage`
+  );
+
+  // AC8.2: Staff tokens on reporter POST /api/reports & /api/auth/me strictly return 403
+  const adminCreateReport = await request("POST", "/api/reports", {
+    description: "Staff attempt to submit reporter form",
+    location_id: 1,
+    category: "Other"
+  }, adminToken);
+  const techCreateReport = await request("POST", "/api/reports", {
+    description: "Technician attempt to submit reporter form",
+    location_id: 1,
+    category: "Other"
+  }, tech1Token);
+  const adminReporterMe = await request("GET", "/api/auth/me", null, adminToken);
+
+  assert(
+    adminCreateReport.status === 403 &&
+    techCreateReport.status === 403 &&
+    adminReporterMe.status === 403,
+    "AC8.2",
+    "Staff tokens on POST /api/reports and GET /api/auth/me strictly return 403 Forbidden"
+  );
+
+  // AC8.3: Reporter endpoints build responses strictly from allowlist and never leak staff/other-user fields
+  const allowedReportKeys = new Set([
+    "id", "description", "category", "status", "location", "block", "room",
+    "location_type", "photo_url", "photo_path", "created_at", "updated_at",
+    "resolved_at", "resolution_action", "timeline", "updates"
+  ]);
+  const allowedLocationKeys = new Set(["block", "room", "location_type"]);
+  const allowedTimelineKeys = new Set(["from_status", "to_status", "changed_at"]);
+  const allowedUpdateKeys = new Set(["text", "created_at"]);
+  const allowedNotifKeys = new Set(["id", "report_id", "message", "read_at", "created_at"]);
+  const forbiddenKeys = new Set([
+    "priority", "priority_overridden_by", "priority_override_reason",
+    "assigned_to", "assignee", "assigned_technician", "remarks", "internal_remarks",
+    "user_id", "changed_by", "staff_id", "reporter_name", "reporter_role",
+    "suggested_category", "safety_rule_matched", "users", "password_hash"
+  ]);
+
+  function findNonAllowlistedKeys(obj, allowSet, prefix = "") {
+    const violations = [];
+    if (!obj || typeof obj !== "object") return violations;
+    for (const key of Object.keys(obj)) {
+      if (forbiddenKeys.has(key) || !allowSet.has(key)) {
+        violations.push(`${prefix}${key}`);
+      }
+    }
+    return violations;
+  }
+
+  const resolvedRepRes = await request("POST", "/api/reports", {
+    description: "AC8.3 water faucet leak in Block 2 Lab for allowlist verification",
+    location_id: 2,
+    category: "Water"
+  }, studentToken);
+  const r83Id = resolvedRepRes.body.report.id;
+  await request("PUT", `/api/staff/reports/${r83Id}`, { status: "assigned", assigned_to: 3, priority: "high" }, adminToken);
+  await request("PUT", `/api/staff/reports/${r83Id}`, { status: "in_progress" }, tech1Token);
+  await request("POST", `/api/staff/reports/${r83Id}/resolve`, { action: "Replaced defective valve", remarks: "SECRET_INTERNAL_STAFF_REMARK" }, tech1Token);
+
+  const mineAllowRes = await request("GET", "/api/reports/mine", null, studentToken);
+  const detailAllowRes = await request("GET", `/api/reports/${r83Id}`, null, studentToken);
+  const histAllowRes = await request("GET", `/api/reports/${r83Id}/history`, null, studentToken);
+  const notifAllowRes = await request("GET", "/api/notifications", null, studentToken);
+
+  const allowViolations = [];
+  for (const item of [resolvedRepRes.body.report, detailAllowRes.body.report, ...(mineAllowRes.body.reports || [])]) {
+    allowViolations.push(...findNonAllowlistedKeys(item, allowedReportKeys, "report."));
+    if (item.location) allowViolations.push(...findNonAllowlistedKeys(item.location, allowedLocationKeys, "report.location."));
+    for (const t of item.timeline || []) allowViolations.push(...findNonAllowlistedKeys(t, allowedTimelineKeys, "report.timeline."));
+    for (const u of item.updates || []) allowViolations.push(...findNonAllowlistedKeys(u, allowedUpdateKeys, "report.updates."));
+  }
+  for (const h of histAllowRes.body.history || []) allowViolations.push(...findNonAllowlistedKeys(h, allowedTimelineKeys, "history."));
+  for (const n of notifAllowRes.body.notifications || []) allowViolations.push(...findNonAllowlistedKeys(n, allowedNotifKeys, "notif."));
+
+  const detailJsonStr = JSON.stringify(detailAllowRes.body);
+  assert(
+    allowViolations.length === 0 &&
+    detailAllowRes.status === 200 &&
+    detailAllowRes.body.report.resolution_action === "Replaced defective valve" &&
+    Array.isArray(detailAllowRes.body.report.timeline) &&
+    detailAllowRes.body.report.timeline.length >= 2 &&
+    !detailJsonStr.includes("SECRET_INTERNAL_STAFF_REMARK") &&
+    !detailJsonStr.includes("admin@campus.edu"),
+    "AC8.3",
+    `Reporter endpoints emit strictly allowlisted keys only (violations: ${allowViolations.join(", ") || "none"})`
+  );
+
+  // AC8.4: Health endpoint, production JWT_SECRET startup check, CORS preflight & reporter token isolation
+  const healthRes = await request("GET", "/api/health");
+  const prevAllowedOrigin = process.env.ALLOWED_ORIGIN;
+  process.env.ALLOWED_ORIGIN = "https://campus-black-box-delta.vercel.app";
+  const corsRes = await request("OPTIONS", "/api/reports", null, null, {
+    origin: "https://campus-black-box-delta.vercel.app",
+    "access-control-request-method": "POST",
+    "access-control-request-headers": "authorization, content-type"
+  });
+  if (prevAllowedOrigin === undefined) delete process.env.ALLOWED_ORIGIN;
+  else process.env.ALLOWED_ORIGIN = prevAllowedOrigin;
+
+  const startupCheckResult = validateStartupConfig({ NODE_ENV: "production", JWT_SECRET: "" });
+  const prodStartRes = spawnSync(process.execPath, ["server.js"], {
+    cwd: __dirname,
+    env: { ...process.env, NODE_ENV: "production", JWT_SECRET: "" },
+    encoding: "utf8"
+  });
+  const apiSrc = fs.readFileSync(path.join(__dirname, "frontend/src/lib/api.ts"), "utf8");
+  const authSrc = fs.readFileSync(path.join(__dirname, "frontend/src/lib/auth.tsx"), "utf8");
+
+  assert(
+    healthRes.status === 200 &&
+    typeof healthRes.body.version === "string" &&
+    typeof healthRes.body.demo_mode === "boolean" &&
+    "commit" in healthRes.body &&
+    corsRes.status === 204 &&
+    corsRes.headers["access-control-allow-origin"] === "https://campus-black-box-delta.vercel.app" &&
+    corsRes.headers["access-control-allow-headers"].includes("Authorization") &&
+    startupCheckResult.ok === false &&
+    prodStartRes.status !== 0 &&
+    apiSrc.includes('REPORTER_TOKEN_KEY = "cbb_reporter_token"') &&
+    authSrc.includes('aud !== "reporter"'),
+    "AC8.4",
+    "GET /api/health, ALLOWED_ORIGIN OPTIONS preflight, production JWT_SECRET startup guard, and portal token checks pass"
+  );
+
+  // AC8.5: PNG-with-alpha, JPEG, and WebP photo uploads preserve exact original bytes & type
+  function buildPngWithAlpha() {
+    function crc32(buf) {
+      let c = 0xffffffff;
+      for (const b of buf) {
+        c ^= b;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      return (c ^ 0xffffffff) >>> 0;
+    }
+    function chunk(type, data) {
+      const len = Buffer.alloc(4);
+      len.writeUInt32BE(data.length, 0);
+      const t = Buffer.from(type, "ascii");
+      const crc = Buffer.alloc(4);
+      crc.writeUInt32BE(crc32(Buffer.concat([t, data])), 0);
+      return Buffer.concat([len, t, data, crc]);
+    }
+    const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    const ihdr = Buffer.from([0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0, 0, 0]); // 2x2 RGBA (colorType 6)
+    const raw = Buffer.from([
+      0, 220, 40, 40, 255, 40, 180, 90, 128,
+      0, 30, 120, 230, 200, 0, 0, 0, 0
+    ]);
+    const idat = zlib.deflateSync(raw);
+    return Buffer.concat([sig, chunk("IHDR", ihdr), chunk("IDAT", idat), chunk("IEND", Buffer.alloc(0))]);
+  }
+  const pngAlphaBuf = buildPngWithAlpha();
+  const jpegBuf = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]), Buffer.from("JFIF\0\x01\x01\0\0\x01\0\x01\0\0", "latin1"), Buffer.from([0xff, 0xd9])]);
+  const webpBuf = Buffer.concat([Buffer.from("RIFF", "ascii"), Buffer.from([0x1a, 0x00, 0x00, 0x00]), Buffer.from("WEBPVP8L", "ascii"), Buffer.alloc(18, 0x2f)]);
+
+  const photoCases = [
+    { name: "png-alpha", mime: "image/png", ext: ".png", buf: pngAlphaBuf },
+    { name: "jpeg", mime: "image/jpeg", ext: ".jpg", buf: jpegBuf },
+    { name: "webp", mime: "image/webp", ext: ".webp", buf: webpBuf }
+  ];
+  let allPhotosExact = true;
+  const photoErrors = [];
+  for (const tc of photoCases) {
+    const dataUrl = `data:${tc.mime};base64,${tc.buf.toString("base64")}`;
+    const upRes = await request("POST", "/api/reports", {
+      description: `AC8.5 ${tc.name} upload verification in Block 1 Room 101`,
+      location_id: 1,
+      category: "Other",
+      photo_data: dataUrl
+    }, facultyToken);
+    const savedPath = upRes.body?.report?.photo_path || "";
+    const diskFilename = savedPath.replace("/api/photos/", "");
+    const diskBuf = diskFilename ? fs.readFileSync(path.join(__dirname, "uploads", diskFilename)) : null;
+    const dlRes = savedPath ? await request("GET", savedPath, null, facultyToken) : null;
+    if (
+      upRes.status !== 201 ||
+      !savedPath.endsWith(tc.ext) ||
+      !diskBuf ||
+      !diskBuf.equals(tc.buf) ||
+      !dlRes ||
+      dlRes.status !== 200 ||
+      dlRes.headers["content-type"] !== tc.mime ||
+      !Buffer.isBuffer(dlRes.rawBuffer) ||
+      !dlRes.rawBuffer.equals(tc.buf)
+    ) {
+      allPhotosExact = false;
+      photoErrors.push(`${tc.name}(up:${upRes.status},path:${savedPath},diskEq:${diskBuf?.equals(tc.buf)},dl:${dlRes?.status},ct:${dlRes?.headers["content-type"]},dlLen:${dlRes?.rawBuffer?.length}/${tc.buf.length})`);
+    }
+  }
+  assert(
+    allPhotosExact,
+    "AC8.5",
+    `Photo uploads for PNG-with-alpha, JPEG, and WebP preserve exact original bytes, extensions, and Content-Type (${photoErrors.join("; ") || "ok"})`
   );
 
   // -------------------------------------------------------------

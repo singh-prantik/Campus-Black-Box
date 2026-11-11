@@ -22,7 +22,33 @@ const crypto = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
 
 const PORT = Number(process.env.PORT) || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || "cbb-production-secret-key-32chars!!";
+const PKG_VERSION = (() => {
+  try {
+    return require("./package.json").version || "1.0.0";
+  } catch {
+    return "1.0.0";
+  }
+})();
+
+function validateStartupConfig(env = process.env) {
+  if (env.NODE_ENV === "production" && (!env.JWT_SECRET || !String(env.JWT_SECRET).trim())) {
+    return {
+      ok: false,
+      error: "FATAL: JWT_SECRET environment variable is required when NODE_ENV=production. Refusing to start."
+    };
+  }
+  return { ok: true };
+}
+
+if (require.main === module) {
+  const startupCheck = validateStartupConfig(process.env);
+  if (!startupCheck.ok) {
+    console.error(startupCheck.error);
+    process.exit(1);
+  }
+}
+
+const JWT_SECRET = (process.env.JWT_SECRET && process.env.JWT_SECRET.trim()) || "cbb-production-secret-key-32chars!!";
 const DB_PATH = path.join(__dirname, "campus_blackbox.db");
 const PUBLIC_DIR = path.join(__dirname, "public");
 const UPLOADS_DIR = path.join(__dirname, "uploads");
@@ -1016,11 +1042,12 @@ function seedData(forceReset = false) {
   console.log("Database seeded successfully with authenticated users and strict lifecycle rules!");
 }
 
-// Reseed on startup if database is missing tables or records
+// Reseed on startup if database is missing tables or records (e.g. Render ephemeral disk reset)
 try {
   const existingUsers = db.prepare("SELECT COUNT(*) as c FROM users").get().c;
   const existingLocations = db.prepare("SELECT COUNT(*) as c FROM locations").get().c;
-  if (existingUsers < 6 || existingLocations < 9) {
+  const existingReports = db.prepare("SELECT COUNT(*) as c FROM reports").get().c;
+  if (existingUsers < 6 || existingLocations < 9 || existingReports === 0) {
     seedData(true);
   }
 } catch {
@@ -1047,12 +1074,99 @@ function parseRequestBody(req) {
   });
 }
 
+function getReporterTimeline(reportId) {
+  return db.prepare(`
+    SELECT from_status, to_status, changed_at
+    FROM status_history
+    WHERE report_id = ?
+    ORDER BY changed_at ASC, id ASC
+  `).all(reportId).map(h => ({
+    from_status: h.from_status ?? null,
+    to_status: h.to_status,
+    changed_at: h.changed_at
+  }));
+}
+
+function getReporterUpdates(reportId) {
+  return db.prepare(`
+    SELECT text, created_at
+    FROM report_updates
+    WHERE report_id = ?
+    ORDER BY created_at ASC
+  `).all(reportId).map(u => ({
+    text: u.text,
+    created_at: u.created_at
+  }));
+}
+
+function getResolutionActionText(reportId, status) {
+  if (status !== "resolved") return null;
+  const resRecord = db.prepare("SELECT action FROM resolutions WHERE report_id = ? ORDER BY id DESC LIMIT 1").get(reportId);
+  return resRecord ? resRecord.action : null;
+}
+
+function buildReporterReportPayload(row, extras = {}) {
+  const timeline = extras.timeline !== undefined ? extras.timeline : getReporterTimeline(row.id);
+  const updates = extras.updates !== undefined ? extras.updates : getReporterUpdates(row.id);
+  const resolutionAction = extras.resolutionAction !== undefined
+    ? extras.resolutionAction
+    : getResolutionActionText(row.id, row.status);
+
+  return {
+    id: row.id,
+    description: row.description,
+    category: row.category,
+    status: row.status,
+    location: {
+      block: row.block ?? null,
+      room: row.room ?? null,
+      location_type: row.location_type ?? null
+    },
+    block: row.block ?? null,
+    room: row.room ?? null,
+    location_type: row.location_type ?? null,
+    photo_url: row.photo_url ?? null,
+    photo_path: row.photo_path ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at ?? null,
+    resolved_at: row.resolved_at ?? null,
+    resolution_action: resolutionAction,
+    timeline,
+    updates
+  };
+}
+
+function getCorsHeaders(req) {
+  const rawAllowed = (process.env.ALLOWED_ORIGIN || "").trim();
+  const reqOrigin = req && req.headers && req.headers.origin ? String(req.headers.origin).replace(/\/+$/, "") : "";
+  const headers = {
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Vary": "Origin"
+  };
+
+  if (!rawAllowed) {
+    headers["Access-Control-Allow-Origin"] = "*";
+    return headers;
+  }
+
+  const allowedList = rawAllowed.split(",").map(s => s.trim().replace(/\/+$/, "")).filter(Boolean);
+  if (allowedList.includes("*")) {
+    headers["Access-Control-Allow-Origin"] = reqOrigin || "*";
+  } else if (reqOrigin) {
+    if (allowedList.includes(reqOrigin)) {
+      headers["Access-Control-Allow-Origin"] = reqOrigin;
+    }
+  } else if (allowedList.length > 0) {
+    headers["Access-Control-Allow-Origin"] = allowedList[0];
+  }
+  return headers;
+}
+
 function sendJson(res, statusCode, data) {
   res.writeHead(statusCode, {
     "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization"
+    ...(res._corsHeaders || getCorsHeaders(null))
   });
   res.end(JSON.stringify(data));
 }
@@ -1079,20 +1193,27 @@ async function handleRequest(req, res) {
   const pathname = parsedUrl.pathname;
   const method = req.method.toUpperCase();
   const clientIp = getClientIp(req);
+  res._corsHeaders = getCorsHeaders(req);
 
   // Handle CORS Pre-flight
   if (method === "OPTIONS") {
-    res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization"
-    });
+    res.writeHead(204, res._corsHeaders);
     return res.end();
   }
 
   // -------------------------------------------------------------
   // CONFIG & UTILITY ENDPOINTS
   // -------------------------------------------------------------
+
+  if (pathname === "/api/health" && method === "GET") {
+    const isDemo = process.env.DEMO_MODE === "true" || process.env.DEMO_MODE !== "false";
+    return sendJson(res, 200, {
+      status: "ok",
+      version: PKG_VERSION,
+      commit: process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || null,
+      demo_mode: isDemo
+    });
+  }
 
   if (pathname === "/api/config" && method === "GET") {
     const isDemo = process.env.DEMO_MODE === "true" || process.env.DEMO_MODE !== "false";
@@ -1205,15 +1326,35 @@ async function handleRequest(req, res) {
   if (pathname === "/api/auth/me" && method === "GET") {
     const user = getAuthUser(req);
     if (!user) return sendJson(res, 401, { detail: "Authentication required" });
-    if (user.aud !== "reporter") return sendJson(res, 403, { detail: "Forbidden: Reporter portal access required" });
-    return sendJson(res, 200, { user });
+    if (user.aud !== "reporter" || (user.role !== "student" && user.role !== "faculty")) {
+      return sendJson(res, 403, { detail: "Forbidden: Reporter portal access required" });
+    }
+    return sendJson(res, 200, {
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        aud: "reporter"
+      }
+    });
   }
 
   if (pathname === "/api/staff/auth/me" && method === "GET") {
     const user = getAuthUser(req);
     if (!user) return sendJson(res, 401, { detail: "Authentication required" });
-    if (user.aud !== "staff") return sendJson(res, 403, { detail: "Forbidden: Staff portal access required" });
-    return sendJson(res, 200, { user });
+    if (user.aud !== "staff" || !["maintenance", "admin", "super_admin"].includes(user.role)) {
+      return sendJson(res, 403, { detail: "Forbidden: Staff portal access required" });
+    }
+    return sendJson(res, 200, {
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        aud: "staff"
+      }
+    });
   }
 
   // -------------------------------------------------------------
@@ -1305,7 +1446,10 @@ async function handleRequest(req, res) {
 
     const ext = path.extname(filePath).toLowerCase();
     const mimeTypes = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp" };
-    res.writeHead(200, { "Content-Type": mimeTypes[ext] || "application/octet-stream" });
+    res.writeHead(200, {
+      "Content-Type": mimeTypes[ext] || "application/octet-stream",
+      ...(res._corsHeaders || getCorsHeaders(req))
+    });
     return fs.createReadStream(filePath).pipe(res);
   }
 
@@ -1488,20 +1632,21 @@ async function handleRequest(req, res) {
     );
 
     const createdReport = db.prepare(`
-      SELECT r.*, l.block, l.room, u.name as reporter_name, u.role as reporter_role
+      SELECT r.id, r.description, r.category, r.status, r.photo_url, r.photo_path,
+             r.created_at, r.updated_at, r.resolved_at,
+             l.block, l.room, l.location_type
       FROM reports r
       LEFT JOIN locations l ON r.location_id = l.id
-      LEFT JOIN users u ON r.user_id = u.id
       WHERE r.id = ?
     `).get(reportId);
 
-    // CRITICAL: Priority is STAFF-ONLY, omit from reporter response (AC6.5)
-    delete createdReport.priority;
-    delete createdReport.priority_overridden_by;
-    delete createdReport.priority_override_reason;
+    const safeReport = buildReporterReportPayload(createdReport, {
+      resolutionAction: null,
+      updates: []
+    });
 
     return sendJson(res, 201, {
-      report: createdReport,
+      report: safeReport,
       prediction: {
         predicted_category: catResult.category,
         category_confidence: catResult.confidence,
@@ -1519,8 +1664,8 @@ async function handleRequest(req, res) {
     if (!user) return sendJson(res, 401, { detail: "Authentication required" });
     if (user.aud !== "reporter") return sendJson(res, 403, { detail: "Forbidden: Reporter portal access required" });
 
-    // Returns reports created by user OR contributed to via report_updates
-    const reports = db.prepare(`
+    // Returns reports created by user OR contributed to via report_updates using strict allowlist
+    const rows = db.prepare(`
       SELECT DISTINCT r.id, r.description, r.category, r.status, r.photo_url, r.photo_path,
              r.created_at, r.updated_at, r.resolved_at,
              l.block, l.room, l.location_type
@@ -1531,11 +1676,11 @@ async function handleRequest(req, res) {
       ORDER BY r.created_at DESC
     `).all(user.id, user.id);
 
-    // Note: r.priority is strictly NOT included, fulfilling AC6.5
+    const reports = rows.map(row => buildReporterReportPayload(row));
     return sendJson(res, 200, { reports });
   }
 
-  // Reporter: View Single Report Details (Ownership enforced, sanitized) (FR-9, AC6.5)
+  // Reporter: View Single Report Details (Ownership enforced, strict allowlist) (FR-9, AC6.5)
   const repDetailMatch = pathname.match(/^\/api\/reports\/(\d+)$/);
   if (repDetailMatch && method === "GET") {
     const user = getAuthUser(req);
@@ -1547,7 +1692,7 @@ async function handleRequest(req, res) {
     }
 
     const reportId = Number(repDetailMatch[1]);
-    const report = db.prepare(`
+    const row = db.prepare(`
       SELECT r.id, r.user_id, r.description, r.category, r.status, r.photo_url, r.photo_path,
              r.created_at, r.updated_at, r.resolved_at,
              l.block, l.room, l.location_type
@@ -1556,31 +1701,16 @@ async function handleRequest(req, res) {
       WHERE r.id = ?
     `).get(reportId);
 
-    if (!report) return sendJson(res, 404, { detail: "Report not found" });
+    if (!row) return sendJson(res, 404, { detail: "Report not found" });
 
     // Ownership or contributed updates check
     const hasContributed = db.prepare("SELECT id FROM report_updates WHERE report_id = ? AND user_id = ?").get(reportId, user.id);
-    if (report.user_id !== user.id && !hasContributed) {
+    if (row.user_id !== user.id && !hasContributed) {
       return sendJson(res, 403, { detail: "Forbidden: You can only view your own reports" });
     }
 
-    // Reporter view: Include resolution action if resolved, but NO priority or internal remarks
-    let resolutionAction = null;
-    if (report.status === "resolved") {
-      const resRecord = db.prepare("SELECT action FROM resolutions WHERE report_id = ? ORDER BY id DESC LIMIT 1").get(reportId);
-      if (resRecord) resolutionAction = resRecord.action;
-    }
-
-    const updates = db.prepare(`
-      SELECT text, created_at FROM report_updates WHERE report_id = ? ORDER BY created_at ASC
-    `).all(reportId);
-
     return sendJson(res, 200, {
-      report: {
-        ...report,
-        resolution_action: resolutionAction,
-        updates
-      }
+      report: buildReporterReportPayload(row)
     });
   }
 
@@ -1600,27 +1730,27 @@ async function handleRequest(req, res) {
       return sendJson(res, 403, { detail: "Forbidden: You can only view your own report history" });
     }
 
-    const history = db.prepare(`
-      SELECT from_status, to_status, changed_at
-      FROM status_history
-      WHERE report_id = ?
-      ORDER BY changed_at ASC, id ASC
-    `).all(reportId);
-
-    return sendJson(res, 200, { history });
+    const history = getReporterTimeline(reportId);
+    return sendJson(res, 200, { history, timeline: history });
   }
 
-  // Reporter: Notifications
+  // Reporter: Notifications (strict allowlist - omit user_id)
   if (pathname === "/api/notifications" && method === "GET") {
     const user = getAuthUser(req);
     if (!user) return sendJson(res, 401, { detail: "Authentication required" });
     if (user.aud !== "reporter") return sendJson(res, 403, { detail: "Forbidden: Reporter portal access required" });
 
     const notifications = db.prepare(`
-      SELECT * FROM notifications
+      SELECT id, report_id, message, read_at, created_at FROM notifications
       WHERE user_id = ?
       ORDER BY created_at DESC LIMIT 50
-    `).all(user.id);
+    `).all(user.id).map(n => ({
+      id: n.id,
+      report_id: n.report_id,
+      message: n.message,
+      read_at: n.read_at ?? null,
+      created_at: n.created_at
+    }));
 
     const unreadCount = notifications.filter(n => !n.read_at).length;
     return sendJson(res, 200, { notifications, unread_count: unreadCount });
@@ -1646,21 +1776,22 @@ async function handleRequest(req, res) {
     return sendJson(res, 200, { success: true });
   }
 
-  // Legacy GET /api/reports endpoint
+  // Legacy GET /api/reports endpoint (strict allowlist)
   if (pathname === "/api/reports" && method === "GET") {
     const user = getAuthUser(req);
     if (!user) return sendJson(res, 401, { detail: "Authentication required" });
-    if (user.aud === "staff") {
-      return sendJson(res, 403, { detail: "Forbidden: Staff must query /api/staff/reports" });
+    if (user.aud !== "reporter") {
+      return sendJson(res, 403, { detail: "Forbidden: Reporter portal access required. Staff must query /api/staff/reports" });
     }
-    const reports = db.prepare(`
+    const rows = db.prepare(`
       SELECT r.id, r.description, r.category, r.status, r.photo_url, r.photo_path,
-             r.created_at, r.updated_at, r.resolved_at, l.block, l.room
+             r.created_at, r.updated_at, r.resolved_at, l.block, l.room, l.location_type
       FROM reports r
       LEFT JOIN locations l ON r.location_id = l.id
       WHERE r.user_id = ?
       ORDER BY r.created_at DESC
     `).all(user.id);
+    const reports = rows.map(row => buildReporterReportPayload(row));
     return sendJson(res, 200, { reports });
   }
 
@@ -1877,7 +2008,7 @@ async function handleRequest(req, res) {
       res.writeHead(200, {
         "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": "attachment; filename=\"category_corrections.csv\"",
-        "Access-Control-Allow-Origin": "*"
+        ...(res._corsHeaders || getCorsHeaders(req))
       });
       return res.end(csv);
     }
@@ -2039,9 +2170,9 @@ async function handleRequest(req, res) {
       });
     }
 
-    // 8. Staff: Resolve Ticket (POST /api/staff/reports/:id/resolve)
+    // 8. Staff: Resolve Ticket (POST/PATCH /api/staff/reports/:id/resolve)
     const staffResolve = pathname.match(/^\/api\/staff\/reports\/(\d+)\/resolve$/);
-    if (staffResolve && method === "POST") {
+    if (staffResolve && (method === "POST" || method === "PATCH")) {
       const reportId = Number(staffResolve[1]);
       const body = await parseRequestBody(req);
 
@@ -2285,6 +2416,9 @@ const server = http.createServer(handleRequest);
 const HOST = process.env.HOST || "0.0.0.0";
 
 if (require.main === module) {
+  if (!validateStartupConfig(process.env)) {
+    process.exit(1);
+  }
   server.listen(PORT, HOST, () => {
     console.log(`=======================================================`);
     console.log(`🚀 Campus Black Box Server running on port ${PORT}!`);
@@ -2303,5 +2437,8 @@ module.exports = {
   computePriority,
   classifyCategory,
   detectDuplicates,
-  DUPLICATE_THRESHOLD
+  DUPLICATE_THRESHOLD,
+  validateStartupConfig,
+  getCorsHeaders,
+  buildReporterReportPayload
 };

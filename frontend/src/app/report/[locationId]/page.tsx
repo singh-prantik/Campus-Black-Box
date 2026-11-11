@@ -4,14 +4,13 @@ import React, { useState, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
+import PhotoUploadField from "@/components/PhotoUploadField";
 import { apiCreateReport, apiGetLocations, apiPredict } from "@/lib/api";
 import { Location } from "@/types";
 import { useAuth } from "@/lib/auth";
 import toast from "react-hot-toast";
 import {
   MapPin,
-  X,
-  Camera,
   ArrowLeft,
   Sparkles,
   AlertTriangle,
@@ -112,11 +111,6 @@ export default function ReportIncidentPage() {
     };
   }, [description, selectedLocId]);
 
-  const handleSimulatePhoto = () => {
-    setPhotoPreview("/samples/projector.webp");
-    toast.success("Photo attached");
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!description.trim()) {
@@ -130,7 +124,7 @@ export default function ReportIncidentPage() {
         description,
         location_id: selectedLocId,
         category: selectedCategory || aiResult?.category || undefined,
-        photo_url: photoPreview || undefined,
+        photo_data: photoPreview || undefined,
       });
       setSubmittedId(res.report.id);
       toast.success("Incident reported successfully");
@@ -208,10 +202,10 @@ export default function ReportIncidentPage() {
             </div>
             <div className="pt-2 flex flex-col sm:flex-row gap-2 justify-center">
               <Link
-                href={user?.role === "maintenance" ? "/dashboard/technician" : "/dashboard/admin"}
+                href="/staff/login"
                 className="px-4 py-2 rounded-input bg-text text-bg text-xs font-semibold hover:opacity-90 inline-flex items-center justify-center gap-1.5"
               >
-                Go to Dashboard
+                Staff Portal Sign In
                 <ArrowRight className="w-3.5 h-3.5 stroke-[1.5]" />
               </Link>
               <Link
@@ -254,10 +248,10 @@ export default function ReportIncidentPage() {
             </div>
             <div className="pt-2 flex justify-center gap-3">
               <Link
-                href="/"
+                href="/my-reports"
                 className="px-4 py-2 rounded-input bg-text text-bg text-xs font-semibold hover:opacity-90"
               >
-                View all incidents
+                View My Reports
               </Link>
               <button
                 type="button"
@@ -407,39 +401,12 @@ export default function ReportIncidentPage() {
                 )}
               </div>
 
-              {/* Photo Upload with Preview */}
-              <div>
-                <label className="block text-xs font-semibold text-text mb-1.5">
-                  Photo Evidence (Optional)
-                </label>
-                {photoPreview ? (
-                  <div className="relative w-full aspect-[16/10] max-h-48 rounded-input overflow-hidden border border-border bg-bg">
-                    <img
-                      src={photoPreview}
-                      alt="Incident evidence preview"
-                      className="w-full h-full object-cover"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setPhotoPreview(null)}
-                      className="absolute top-2 right-2 p-1 rounded-full bg-surface border border-border text-text hover:bg-bg"
-                    >
-                      <X className="w-4 h-4 stroke-[1.5]" />
-                    </button>
-                  </div>
-                ) : (
-                  <div
-                    onClick={handleSimulatePhoto}
-                    className="border border-dashed border-border rounded-input p-6 text-center cursor-pointer hover:border-accent transition-colors bg-bg"
-                  >
-                    <Camera className="w-6 h-6 text-muted mx-auto stroke-[1.5] mb-2" />
-                    <div className="text-xs font-medium text-text">
-                      Click to attach photo evidence
-                    </div>
-                    <div className="text-[11px] text-muted mt-0.5">Supports PNG, WebP, JPG up to 5MB</div>
-                  </div>
-                )}
-              </div>
+              {/* Real Photo Upload with Preview */}
+              <PhotoUploadField
+                value={photoPreview}
+                onChange={setPhotoPreview}
+                disabled={loading}
+              />
 
               {/* Legal Consent Line */}
               <div className="text-[12px] text-muted leading-relaxed">

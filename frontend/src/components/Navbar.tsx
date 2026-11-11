@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTheme } from "@/lib/theme";
 import { useAuth } from "@/lib/auth";
+import { apiGetNotifications, apiMarkNotificationsRead, apiGetMyReports } from "@/lib/api";
+import { NotificationItem, Report } from "@/types";
 import {
   Shield,
   Search,
@@ -18,7 +20,6 @@ import {
   Clock,
   Check,
 } from "lucide-react";
-import { SAMPLE_INCIDENTS } from "@/lib/mockData";
 
 interface NavbarProps {
   onSearchChange?: (val: string) => void;
@@ -35,8 +36,39 @@ export default function Navbar({ onSearchChange, searchValue = "" }: NavbarProps
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [myReports, setMyReports] = useState<Report[]>([]);
   const [profileOpen, setProfileOpen] = useState(false);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+
+  const isReporterUser = !!user && (user.role === "student" || user.role === "faculty");
+
+  useEffect(() => {
+    if (!isReporterUser) {
+      setNotifications([]);
+      setUnreadCount(0);
+      setMyReports([]);
+      return;
+    }
+    let active = true;
+    apiGetNotifications()
+      .then((res) => {
+        if (!active) return;
+        setNotifications(res.notifications || []);
+        setUnreadCount(res.unread_count || 0);
+      })
+      .catch(() => {});
+    apiGetMyReports()
+      .then((res) => {
+        if (!active) return;
+        setMyReports(res.reports || []);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [isReporterUser]);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchDropdownRef = useRef<HTMLDivElement>(null);
@@ -81,18 +113,20 @@ export default function Navbar({ onSearchChange, searchValue = "" }: NavbarProps
   }, [query]);
 
   const suggestions = useMemo(() => {
-    if (debouncedQuery.length < 2) return [];
+    if (!isReporterUser || debouncedQuery.length < 2) return [];
     const q = debouncedQuery.toLowerCase();
-    return SAMPLE_INCIDENTS.filter(
-      (inc) =>
-        inc.title?.toLowerCase().includes(q) ||
-        inc.description.toLowerCase().includes(q) ||
-        inc.location?.room.toLowerCase().includes(q) ||
-        inc.location?.block.toLowerCase().includes(q) ||
-        `#${inc.id}`.includes(q) ||
-        inc.category.toLowerCase().includes(q)
-    ).slice(0, 5);
-  }, [debouncedQuery]);
+    return myReports
+      .filter(
+        (inc) =>
+          inc.title?.toLowerCase().includes(q) ||
+          inc.description.toLowerCase().includes(q) ||
+          (inc.room || inc.location?.room || "").toLowerCase().includes(q) ||
+          (inc.block || inc.location?.block || "").toLowerCase().includes(q) ||
+          `#${inc.id}`.includes(q) ||
+          inc.category.toLowerCase().includes(q)
+      )
+      .slice(0, 5);
+  }, [isReporterUser, myReports, debouncedQuery]);
 
   const saveRecentSearch = (term: string) => {
     if (!term.trim()) return;
@@ -263,7 +297,7 @@ export default function Navbar({ onSearchChange, searchValue = "" }: NavbarProps
                           <span className="truncate">{item.title || item.description}</span>
                         </div>
                         <span className="text-[11px] text-muted flex-shrink-0 ml-2">
-                          {item.location?.block} · {item.location?.room}
+                          {item.block || item.location?.block} · {item.room || item.location?.room}
                         </span>
                       </button>
                     ))}
@@ -357,40 +391,69 @@ export default function Navbar({ onSearchChange, searchValue = "" }: NavbarProps
               )}
             </div>
 
-            {/* Notifications Bell with Unread Badge */}
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setNotificationsOpen(!notificationsOpen)}
-                aria-label="Notifications"
-                className="w-10 h-10 rounded-input flex items-center justify-center border border-border bg-bg text-text hover:bg-border/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent relative"
-              >
-                <Bell className="w-4 h-4 stroke-[1.5]" />
-                <span className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-red-500" />
-              </button>
-              {notificationsOpen && (
-                <div className="animate-dropdown absolute right-0 mt-1 w-64 bg-surface border border-border rounded-input p-3 z-50 text-xs">
-                  <div className="font-semibold text-text mb-2">Notifications</div>
-                  <div className="space-y-2 text-muted">
-                    <div className="p-2 bg-bg border border-border rounded">
-                      <p className="text-text font-medium">Incident #1 assigned</p>
-                      <p className="text-[11px]">Technician assigned to Projector repair.</p>
+            {/* Notifications Bell (Shown ONLY to authenticated Student/Faculty reporters) */}
+            {isReporterUser && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setNotificationsOpen(!notificationsOpen)}
+                  aria-label="Notifications"
+                  className="w-10 h-10 rounded-input flex items-center justify-center border border-border bg-bg text-text hover:bg-border/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent relative"
+                >
+                  <Bell className="w-4 h-4 stroke-[1.5]" />
+                  {unreadCount > 0 && (
+                    <span className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-red-500" />
+                  )}
+                </button>
+                {notificationsOpen && (
+                  <div className="animate-dropdown absolute right-0 mt-1 w-72 bg-surface border border-border rounded-input p-3 z-50 text-xs">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-semibold text-text">Notifications</span>
+                      {unreadCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            apiMarkNotificationsRead()
+                              .then(() => {
+                                setUnreadCount(0);
+                                setNotifications((prev) =>
+                                  prev.map((n) => ({ ...n, read_at: n.read_at || new Date().toISOString() }))
+                                );
+                              })
+                              .catch(() => {});
+                          }}
+                          className="text-[11px] text-accent hover:underline"
+                        >
+                          Mark all read
+                        </button>
+                      )}
                     </div>
-                    <div className="p-2 bg-bg border border-border rounded">
-                      <p className="text-text font-medium">Incident #6 resolved</p>
-                      <p className="text-[11px]">Broken chair replaced in Room 207.</p>
-                    </div>
+                    {notifications.length === 0 ? (
+                      <p className="text-[11px] text-muted py-2">No new notifications yet.</p>
+                    ) : (
+                      <div className="space-y-2 text-muted max-h-60 overflow-y-auto">
+                        {notifications.slice(0, 6).map((n) => (
+                          <div key={n.id} className="p-2 bg-bg border border-border rounded">
+                            <p className="text-text font-medium">{n.message}</p>
+                            <p className="text-[10px] text-muted mt-0.5">
+                              {new Date(n.created_at).toLocaleString()}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            )}
 
-            {/* Authenticated Reporter Menu (Shows User's Name and Role) or Sign In */}
-            {user ? (
+            {/* Authenticated Reporter Menu (Shows Reporter's Own Name and Student/Faculty Role) or Sign In */}
+            {isReporterUser && user ? (
               <div className="relative">
                 <button
                   type="button"
                   onClick={() => setProfileOpen(!profileOpen)}
+                  data-testid="reporter-header-profile"
                   aria-label={`Logged in as ${user.name || user.email} (${reporterRole}). Click to view menu.`}
                   className="h-10 px-3 rounded-input flex items-center gap-2 border border-border bg-bg text-text hover:bg-border/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent text-xs font-medium"
                 >
