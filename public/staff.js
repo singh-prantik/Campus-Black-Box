@@ -303,10 +303,34 @@ function resetStaffFilters() {
   fetchStaffReports();
 }
 
+function formatStaffRoleLabel(role) {
+  const lower = String(role || "student").toLowerCase();
+  if (lower === "faculty") return "Faculty";
+  if (lower === "maintenance" || lower === "technician") return "Technician";
+  return "Student";
+}
+
+function formatStaffLocation(r) {
+  const blk = (r.location && r.location.block) || r.block;
+  const rm = (r.location && r.location.room) || r.room;
+  if (blk && rm) return `<strong>${blk}</strong> · ${rm}`;
+  return blk || rm || "Location unavailable";
+}
+
+function getHeatStepForBlock(openCount, maxOpen) {
+  if (!openCount || openCount <= 0 || !maxOpen || maxOpen <= 0) return 0;
+  const ratio = openCount / maxOpen;
+  if (ratio <= 0.25) return 1;
+  if (ratio <= 0.5) return 2;
+  if (ratio <= 0.75) return 3;
+  return 4;
+}
+
 function renderStaffTable(reports) {
   const tbody = document.getElementById("staff-admin-table-body");
-  if (!reports.length) {
-    tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 36px; color: var(--muted);">No matching incidents found.</td></tr>`;
+  if (!tbody) return;
+  if (!reports || !reports.length) {
+    tbody.innerHTML = `<tr><td colspan="11" style="text-align: center; padding: 36px; color: var(--muted);">No matching incidents found.</td></tr>`;
     return;
   }
 
@@ -315,7 +339,10 @@ function renderStaffTable(reports) {
   tbody.innerHTML = reports.map(r => {
     const statusClass = `status-${r.status}`;
     const prioClass = `prio-${(r.priority || "medium").toLowerCase()}`;
-    const dateFormatted = new Date(r.created_at).toLocaleDateString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    const fullTs = window.CBBTime ? window.CBBTime.formatFullTimestamp(r.created_at) : r.created_at;
+    const relTs = window.CBBTime ? window.CBBTime.formatRelativeTime(r.created_at) : "";
+    const roleLabel = formatStaffRoleLabel(r.reporter_role);
+    const reporterDisplay = r.reporter_name ? `${r.reporter_name} (${roleLabel})` : roleLabel;
 
     // Priority Reason Tooltip (Goal 3b, FR-18, FR-19)
     let prioTooltip = `Rule-based (prototype): default for ${r.category}`;
@@ -329,6 +356,10 @@ function renderStaffTable(reports) {
     const updatesHtml = (r.similar_updates_count && r.similar_updates_count > 0)
       ? `<span class="chip" style="font-size: 10px; background: #FEF3C7; color: #92400E; border-color: #FCD34D; margin-left: 4px;" title="${r.similar_updates_count} community updates logged">+${r.similar_updates_count} updates</span>`
       : "";
+
+    const photoBtnHtml = r.has_photo
+      ? `<button type="button" class="btn btn-secondary btn-sm" aria-label="View photo proof" onclick="openStaffPhotoLightbox(${r.id})" title="View photo proof"><i data-lucide="camera" style="width: 14px; height: 14px;"></i></button>`
+      : `<span style="color: var(--muted); font-size: 11px;">—</span>`;
 
     // Action button logic per PRD State Machine
     let actionButtons = "";
@@ -355,8 +386,12 @@ function renderStaffTable(reports) {
     return `
       <tr style="border-bottom: 1px solid var(--border);">
         <td style="padding: 12px 16px; font-weight: 600;">#${r.id}</td>
-        <td style="padding: 12px 16px;"><strong>${r.block}</strong> · ${r.room}</td>
-        <td style="padding: 12px 16px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${r.description}">
+        <td style="padding: 12px 16px; color: var(--muted); font-size: 11px;" title="${fullTs}">
+          <div style="color: var(--text); font-weight: 600;">${relTs || fullTs}</div>
+          <div>${fullTs}</div>
+        </td>
+        <td style="padding: 12px 16px;">${formatStaffLocation(r)}</td>
+        <td style="padding: 12px 16px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${r.description}">
           ${r.description}
           ${updatesHtml}
         </td>
@@ -368,12 +403,14 @@ function renderStaffTable(reports) {
           </span>
         </td>
         <td style="padding: 12px 16px;"><span class="chip ${statusClass}" style="font-size: 11px; text-transform: capitalize;">${r.status.replace("_", " ")}</span></td>
-        <td style="padding: 12px 16px; color: var(--muted);">${r.assignee_name || "—"}</td>
-        <td style="padding: 12px 16px; color: var(--muted); font-size: 11px;">${dateFormatted}</td>
+        <td style="padding: 12px 16px; color: var(--muted);">${r.assignee_name || "Unassigned"}</td>
+        <td style="padding: 12px 16px; color: var(--muted); font-size: 12px;">Reported by <strong>${reporterDisplay}</strong></td>
+        <td style="padding: 12px 16px; text-align: center;">${photoBtnHtml}</td>
         <td style="padding: 12px 16px; text-align: right;">${actionButtons}</td>
       </tr>
     `;
   }).join("");
+  refreshIcons();
 }
 
 // -------------------------------------------------------------
@@ -574,59 +611,40 @@ async function submitIncidentResolution() {
 // -------------------------------------------------------------
 // CAMPUS HEAT MAP & DRILL-DOWN (FR-15, FR-25)
 // -------------------------------------------------------------
-async function fetchHeatmapData() {
+async function fetchHeatmapData(windowRange) {
   const grid = document.getElementById("heatmap-grid");
+  const selectEl = document.getElementById("heatmap-window-select");
+  const win = windowRange || (selectEl ? selectEl.value : "all") || "all";
   grid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: var(--muted); padding: 24px;">Loading campus heat map...</div>`;
 
   try {
-    const res = await apiStaffFetch("/api/staff/analytics/heatmap");
+    const res = await apiStaffFetch(`/api/staff/blocks/summary?window=${encodeURIComponent(win)}`);
     if (!res.ok) return;
     const data = await res.json();
-    const locations = data.locations || [];
-
-    const blocks = ["Block 1", "Block 2", "Block 3", "Block 4"];
+    const blocks = data.blocks || [];
+    const maxOpen = (data.totals && data.totals.busiest_open_count) || 0;
 
     grid.innerHTML = blocks.map(b => {
-      const locsInBlock = locations.filter(l => l.block === b);
-      const totalIncidents = locsInBlock.reduce((acc, l) => acc + (l.total || 0), 0);
-      const openIncidents = locsInBlock.reduce((acc, l) => acc + (l.open || 0), 0);
-      const resolvedIncidents = locsInBlock.reduce((acc, l) => acc + (l.resolved || 0), 0);
-
-      // Hotspot rooms
-      const activeRooms = locsInBlock
-        .filter(l => (l.total || 0) > 0)
-        .sort((a, b) => (b.open || 0) - (a.open || 0))
-        .slice(0, 3);
+      const step = getHeatStepForBlock(b.open, maxOpen);
+      const topCatHtml = (b.top_categories && b.top_categories.length)
+        ? b.top_categories.map(tc => `<span class="chip" style="font-size: 10px; background: var(--bg); color: var(--text); border-color: var(--border);">${tc.category} (${tc.count})</span>`).join(" ")
+        : `<span style="font-size: 11px; opacity: 0.85;">No incidents</span>`;
 
       return `
-        <div style="background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 18px; cursor: pointer; transition: all 150ms ease;" onclick="openBlockDrilldownModal('${b}')" title="Click to view analytics drilldown for ${b}">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-            <div style="display: flex; align-items: center; gap: 6px;">
-              <h3 style="font-size: 15px; font-weight: 700;">${b}</h3>
-              <i data-lucide="chevron-right" style="width: 14px; height: 14px; color: var(--muted);"></i>
-            </div>
-            <span class="chip" style="font-size: 11px; background: ${openIncidents > 0 ? '#FEF3C7' : '#ECFDF5'}; color: ${openIncidents > 0 ? '#92400E' : '#065F46'}; border-color: ${openIncidents > 0 ? '#FCD34D' : '#A7F3D0'};">
-              ${openIncidents} Active
+        <div style="background: var(--heat-${step}-bg); color: var(--heat-${step}-fg); border: 1px solid var(--heat-${step}-border); border-radius: 12px; padding: 18px; cursor: pointer;" onclick="openBlockDrilldownModal('${b.block}', '${win}')" title="Click to view analytics drilldown for ${b.block}">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <h3 style="font-size: 15px; font-weight: 700;">${b.block}</h3>
+            <span class="chip" style="font-size: 11px; background: transparent; color: var(--heat-${step}-fg); border-color: var(--heat-${step}-border);">
+              ${b.open} open
             </span>
           </div>
-          <div style="display: flex; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 14px;">
-            <span>Total: <strong>${totalIncidents}</strong></span>
-            <span>·</span>
-            <span>Resolved: <strong>${resolvedIncidents}</strong></span>
+          <div style="font-size: 12px; color: var(--heat-${step}-muted); margin-bottom: 10px;">
+            Total: <strong>${b.total}</strong> · Pending: ${b.pending} · Assigned: ${b.assigned} · In progress: ${b.in_progress} · Resolved: ${b.resolved}
           </div>
-          <div>
-            <div style="font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; margin-bottom: 6px;">Hotspot Rooms</div>
-            ${activeRooms.length ? `
-              <div style="display: flex; flex-direction: column; gap: 4px;">
-                ${activeRooms.map(r => `
-                  <div style="display: flex; justify-content: space-between; font-size: 12px; padding: 4px 6px; background: var(--surface); border-radius: 6px;">
-                    <span>${r.room}</span>
-                    <strong style="color: var(--accent);">${r.total} ${r.total === 1 ? 'incident' : 'incidents'}</strong>
-                  </div>
-                `).join("")}
-              </div>
-            ` : `<div style="font-size: 12px; color: var(--muted); font-style: italic;">No incidents reported</div>`}
+          <div style="font-size: 11px; color: var(--heat-${step}-muted); margin-bottom: 8px;">
+            Avg resolution: <strong>${b.has_resolved ? `${b.avg_resolution_hours}h` : "No resolved tickets yet"}</strong>
           </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 4px;">${topCatHtml}</div>
         </div>
       `;
     }).join("");
@@ -638,18 +656,22 @@ async function fetchHeatmapData() {
 }
 
 // Block Drilldown Modal
-async function openBlockDrilldownModal(blockName) {
+async function openBlockDrilldownModal(blockName, windowRange) {
+  const selectEl = document.getElementById("heatmap-window-select");
+  const win = windowRange || (selectEl ? selectEl.value : "all") || "all";
   document.getElementById("drilldown-block-title").textContent = `${blockName} Analytics Drilldown`;
   document.getElementById("modal-block-drilldown").style.display = "flex";
 
   try {
-    const res = await apiStaffFetch(`/api/staff/blocks/${encodeURIComponent(blockName)}/summary`);
+    const res = await apiStaffFetch(`/api/staff/blocks/${encodeURIComponent(blockName)}/summary?window=${encodeURIComponent(win)}`);
     if (!res.ok) return;
     const data = await res.json();
 
     document.getElementById("drilldown-total").textContent = data.total_reports || 0;
     document.getElementById("drilldown-open").textContent = data.open_reports || 0;
-    document.getElementById("drilldown-avg-hours").textContent = `${Number(data.avg_resolution_hours || 0).toFixed(1)}h`;
+    document.getElementById("drilldown-avg-hours").textContent = data.has_resolved
+      ? `${Number(data.avg_resolution_hours || 0).toFixed(1)}h`
+      : "No resolved tickets yet";
 
     const catList = document.getElementById("drilldown-categories-list");
     if (data.top_categories && data.top_categories.length) {
@@ -673,12 +695,58 @@ function closeBlockDrilldownModal() {
   document.getElementById("modal-block-drilldown").style.display = "none";
 }
 
+let activeStaffLightboxBlobUrl = null;
+async function openStaffPhotoLightbox(reportId) {
+  const modal = document.getElementById("modal-photo-lightbox");
+  const titleEl = document.getElementById("lightbox-photo-title");
+  const bodyEl = document.getElementById("lightbox-photo-body");
+  if (!modal || !bodyEl) return;
+
+  if (activeStaffLightboxBlobUrl) {
+    URL.revokeObjectURL(activeStaffLightboxBlobUrl);
+    activeStaffLightboxBlobUrl = null;
+  }
+
+  titleEl.textContent = `Photo Proof — Incident #${reportId}`;
+  bodyEl.innerHTML = `<span style="font-size: 12px; color: var(--muted);">Loading photo proof...</span>`;
+  modal.style.display = "flex";
+  const closeBtn = document.getElementById("lightbox-close-btn");
+  if (closeBtn) closeBtn.focus();
+
+  try {
+    const res = await apiStaffFetch(`/api/staff/reports/${reportId}/photo`);
+    if (!res.ok) {
+      bodyEl.innerHTML = `<span style="font-size: 12px; color: var(--muted);">Photo unavailable</span>`;
+      return;
+    }
+    const blob = await res.blob();
+    if (!blob || blob.size === 0) {
+      bodyEl.innerHTML = `<span style="font-size: 12px; color: var(--muted);">Photo unavailable</span>`;
+      return;
+    }
+    activeStaffLightboxBlobUrl = URL.createObjectURL(blob);
+    bodyEl.innerHTML = `<img src="${activeStaffLightboxBlobUrl}" alt="Photo proof for incident #${reportId}" style="max-height: 64vh; max-width: 100%; object-fit: contain; border-radius: 6px;" onerror="this.parentElement.innerHTML='<span style=&quot;font-size:12px;color:var(--muted);&quot;>Photo unavailable</span>'" />`;
+  } catch {
+    bodyEl.innerHTML = `<span style="font-size: 12px; color: var(--muted);">Photo unavailable</span>`;
+  }
+}
+
+function closeStaffPhotoLightbox() {
+  const modal = document.getElementById("modal-photo-lightbox");
+  if (modal) modal.style.display = "none";
+  if (activeStaffLightboxBlobUrl) {
+    URL.revokeObjectURL(activeStaffLightboxBlobUrl);
+    activeStaffLightboxBlobUrl = null;
+  }
+}
+
 function handleStaffModalBackdropClick(event, modalId) {
   if (event.target && event.target.id === modalId) {
     if (modalId === "modal-assign") closeAssignModal();
     if (modalId === "modal-resolve") closeResolveModal();
     if (modalId === "modal-priority") closePriorityModal();
     if (modalId === "modal-block-drilldown") closeBlockDrilldownModal();
+    if (modalId === "modal-photo-lightbox") closeStaffPhotoLightbox();
   }
 }
 
@@ -710,7 +778,10 @@ async function fetchTechnicianWorkOrders() {
     container.innerHTML = reports.map(r => {
       const statusClass = `status-${r.status}`;
       const prioClass = `prio-${(r.priority || "medium").toLowerCase()}`;
-      const dateFormatted = new Date(r.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+      const fullTs = window.CBBTime ? window.CBBTime.formatFullTimestamp(r.created_at) : r.created_at;
+      const relTs = window.CBBTime ? window.CBBTime.formatRelativeTime(r.created_at) : "";
+      const roleLabel = formatStaffRoleLabel(r.reporter_role);
+      const reporterDisplay = r.reporter_name ? `${r.reporter_name} (${roleLabel})` : roleLabel;
 
       let actionHtml = "";
       if (r.status === "assigned") {
@@ -725,30 +796,25 @@ async function fetchTechnicianWorkOrders() {
         <div style="background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 20px;">
           <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;">
             <div>
-              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap;">
                 <span style="font-weight: 700; font-size: 15px;">#${r.id}</span>
-                <span class="chip" style="font-size: 11px; font-weight: 600;">${r.block} · ${r.room}</span>
+                <span class="chip" style="font-size: 11px; font-weight: 600;">${formatStaffLocation(r)}</span>
                 <span class="chip ${prioClass}" style="font-size: 11px;">${r.priority}</span>
                 <span class="chip ${statusClass}" style="font-size: 11px; text-transform: capitalize;">${r.status.replace("_", " ")}</span>
               </div>
-              <div style="font-size: 12px; color: var(--muted);">Reported on ${dateFormatted}</div>
+              <div style="font-size: 12px; color: var(--muted);" title="${fullTs}">Reported ${relTs ? `${relTs} · ` : ""}${fullTs}</div>
             </div>
-            <div>${actionHtml}</div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              ${r.has_photo ? `<button type="button" class="btn btn-secondary btn-sm" aria-label="View photo proof" onclick="openStaffPhotoLightbox(${r.id})"><i data-lucide="camera" style="width: 14px; height: 14px;"></i> View photo proof</button>` : ""}
+              ${actionHtml}
+            </div>
           </div>
 
           <p style="font-size: 13px; line-height: 1.5; margin-bottom: 12px;">${r.description}</p>
 
-          ${r.photo_path || r.photo_url ? `
-            <div style="margin-top: 12px; margin-bottom: 12px;">
-              <a href="${r.photo_path || r.photo_url}" target="_blank" style="font-size: 12px; color: var(--accent); display: inline-flex; align-items: center; gap: 4px; text-decoration: none;">
-                <i data-lucide="image" style="width: 14px; height: 14px;"></i> View Attached Incident Photo
-              </a>
-            </div>
-          ` : ""}
-
           <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; font-size: 12px; color: var(--muted);">
             <span>Category: <strong>${r.category}</strong></span>
-            <span>Reporter: <strong>${r.reporter_role || 'Reporter'}</strong></span>
+            <span>Reported by <strong>${reporterDisplay}</strong></span>
           </div>
         </div>
       `;
@@ -799,6 +865,7 @@ async function initStaffApp() {
       closeResolveModal();
       closePriorityModal();
       closeBlockDrilldownModal();
+      closeStaffPhotoLightbox();
     }
   });
 

@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { Report } from "@/types";
 import { apiGetReport, apiFetchProtectedPhoto } from "@/lib/api";
+import { formatFullTimestamp, formatRelativeTime } from "@/lib/time";
 import { StatusBadge } from "./StatusBadge";
 import { X, MapPin, Clock, CheckCircle2, Image as ImageIcon } from "lucide-react";
 
@@ -174,8 +175,14 @@ export default function ReportDetailModal({
             <Clock className="w-4 h-4 text-muted shrink-0" />
             <div>
               <div className="text-[11px] text-muted">Submitted</div>
-              <div className="font-semibold text-text">
-                {new Date(detailedReport.created_at).toLocaleString()}
+              <div
+                className="font-semibold text-text"
+                title={formatFullTimestamp(detailedReport.created_at)}
+              >
+                {formatFullTimestamp(detailedReport.created_at)}
+                <span className="text-muted font-normal ml-1.5">
+                  ({formatRelativeTime(detailedReport.created_at)})
+                </span>
               </div>
             </div>
           </div>
@@ -183,14 +190,25 @@ export default function ReportDetailModal({
 
         {/* Photo */}
         {photoSrc && !photoError && (
-          <div className="rounded-input overflow-hidden border border-border bg-white p-2 flex items-center justify-center">
+          <div className="rounded-input overflow-hidden border border-border bg-surface p-2 flex items-center justify-center">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={photoSrc}
               alt={`Attached evidence for incident #${detailedReport.id}`}
+              onLoad={(e) => {
+                if (e.currentTarget.naturalWidth <= 1 && e.currentTarget.naturalHeight <= 1) {
+                  setPhotoError(true);
+                }
+              }}
               onError={() => setPhotoError(true)}
               className="max-h-64 w-full object-contain rounded"
             />
+          </div>
+        )}
+        {photoError && rawPhoto && (
+          <div className="p-4 rounded-input border border-border bg-bg text-xs text-muted flex items-center gap-2">
+            <ImageIcon className="w-4 h-4" />
+            <span>Photo unavailable (file may have cleared after server restart).</span>
           </div>
         )}
         {!photoSrc && rawPhoto && (
@@ -237,8 +255,11 @@ export default function ReportDetailModal({
                     {step.from_status ? `${step.from_status.replace("_", " ")} → ` : ""}
                     {step.to_status.replace("_", " ")}
                   </span>
-                  <span className="text-muted text-[11px]">
-                    {new Date(step.changed_at).toLocaleString()}
+                  <span
+                    className="text-muted text-[11px]"
+                    title={formatFullTimestamp(step.changed_at)}
+                  >
+                    {formatFullTimestamp(step.changed_at)}
                   </span>
                 </div>
               ))}

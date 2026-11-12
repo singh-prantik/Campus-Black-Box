@@ -1,27 +1,37 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import StaffNavbar from "@/components/StaffNavbar";
 import CampusMap from "@/components/CampusMap";
-import { HeatmapLocation } from "@/types";
-import { apiGetHeatmap, useStaffSession } from "@/lib/staffApi";
+import { BlocksSummaryResponse } from "@/types";
+import { apiGetBlocksSummary, useStaffSession } from "@/lib/staffApi";
 import Link from "next/link";
 import { ArrowLeft, Lock } from "lucide-react";
 
 export default function HeatmapPage() {
   const { isAuthenticated, loading: authLoading } = useStaffSession();
-  const [locations, setLocations] = useState<HeatmapLocation[]>([]);
-  const [selectedLoc, setSelectedLoc] = useState<HeatmapLocation | null>(null);
+  const [windowRange, setWindowRange] = useState<"7d" | "30d" | "all">("all");
+  const [summary, setSummary] = useState<BlocksSummaryResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadSummary = useCallback(async (win: "7d" | "30d" | "all") => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await apiGetBlocksSummary(win);
+      setSummary(res);
+    } catch (err: any) {
+      setError(err?.message || "Failed to load campus heat map summary");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (authLoading || !isAuthenticated) return;
-    apiGetHeatmap()
-      .then((res) => {
-        setLocations(res.locations);
-        if (res.locations.length > 0) setSelectedLoc(res.locations[0]);
-      })
-      .catch(() => {});
-  }, [authLoading, isAuthenticated]);
+    void loadSummary(windowRange);
+  }, [authLoading, isAuthenticated, windowRange, loadSummary]);
 
   return (
     <div className="min-h-screen bg-bg text-text pb-16">
@@ -52,13 +62,15 @@ export default function HeatmapPage() {
           </div>
         ) : (
           <CampusMap
-            locations={locations}
-            selectedLocation={selectedLoc}
-            onSelectLocation={(loc) => setSelectedLoc(loc)}
+            summary={summary}
+            windowRange={windowRange}
+            onWindowChange={setWindowRange}
+            loading={loading}
+            error={error}
+            onRefresh={() => void loadSummary(windowRange)}
           />
         )}
       </main>
     </div>
   );
 }
-

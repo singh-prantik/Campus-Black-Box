@@ -5,6 +5,8 @@ import Link from "next/link";
 import StaffNavbar from "@/components/StaffNavbar";
 import { StatusBadge, PriorityBadge } from "@/components/StatusBadge";
 import StaffReportModal from "@/components/StaffReportModal";
+import PhotoLightboxModal from "@/components/PhotoLightboxModal";
+import { formatFullTimestamp, formatRelativeTime } from "@/lib/time";
 import { Report, StaffMember, AnalyticsSummary } from "@/types";
 import {
   apiGetReports,
@@ -25,6 +27,7 @@ import {
   CheckCircle2,
   Clock,
   Layers,
+  Camera,
 } from "lucide-react";
 
 export default function AdminDashboardPage() {
@@ -36,6 +39,7 @@ export default function AdminDashboardPage() {
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
+  const [photoLightboxReport, setPhotoLightboxReport] = useState<Report | null>(null);
 
   // Filters
   const [search, setSearch] = useState("");
@@ -231,9 +235,6 @@ export default function AdminDashboardPage() {
               <span className="text-[11px] font-semibold text-accent uppercase tracking-wider">
                 Control Console
               </span>
-              <span className="text-[11px] px-1.5 py-0.5 rounded-chip bg-border text-muted font-medium">
-                Sample data
-              </span>
             </div>
             <h1 className="text-xl font-bold text-text mt-0.5">Admin Incident Triage</h1>
           </div>
@@ -407,6 +408,7 @@ export default function AdminDashboardPage() {
               <thead>
                 <tr className="border-b border-border bg-bg/50 text-muted font-semibold uppercase text-[11px] tracking-wider">
                   <th className="p-3">ID</th>
+                  <th className="p-3">Reported</th>
                   <th className="p-3">Incident</th>
                   <th className="p-3">Location</th>
                   <th className="p-3">Category</th>
@@ -414,13 +416,14 @@ export default function AdminDashboardPage() {
                   <th className="p-3">Status</th>
                   <th className="p-3">Assignee</th>
                   <th className="p-3">Reporter</th>
+                  <th className="p-3 text-center">Photo</th>
                   <th className="p-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {loading ? (
                   <tr>
-                    <td colSpan={9} className="p-8 text-center text-muted">
+                    <td colSpan={11} className="p-8 text-center text-muted">
                       <div className="flex justify-center items-center gap-2">
                         <span className="w-2 h-2 rounded-full bg-accent animate-ping" />
                         Loading incidents...
@@ -429,18 +432,35 @@ export default function AdminDashboardPage() {
                   </tr>
                 ) : filteredReports.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="p-8 text-center text-muted">
+                    <td colSpan={11} className="p-8 text-center text-muted">
                       No incidents match the active filters.
                     </td>
                   </tr>
                 ) : (
                   filteredReports.map((report) => {
                     const assigneeStaff = staff.find((s) => s.id === report.assigned_to);
-                    const assigneeDisplay = assigneeStaff
-                      ? assigneeStaff.name
-                      : report.assigned_to
-                      ? `Technician #${report.assigned_to}`
-                      : "Unassigned";
+                    const assigneeDisplay =
+                      report.assignee_name ||
+                      (assigneeStaff
+                        ? assigneeStaff.name
+                        : report.assigned_to
+                        ? `Technician #${report.assigned_to}`
+                        : "Unassigned");
+                    const blockName = report.location?.block || report.block;
+                    const roomName = report.location?.room || report.room;
+                    const locDisplay =
+                      blockName && roomName
+                        ? `${blockName} · ${roomName}`
+                        : blockName || roomName || "Location unavailable";
+                    const rawRole = String(
+                      report.reporter_role || report.reporter?.role || "student"
+                    ).toLowerCase();
+                    const roleLabel = rawRole === "faculty" ? "Faculty" : "Student";
+                    const reporterDisplay = report.reporter_name
+                      ? `${report.reporter_name} (${roleLabel})`
+                      : roleLabel;
+                    const fullTs = formatFullTimestamp(report.created_at);
+                    const relTs = formatRelativeTime(report.created_at);
 
                     return (
                       <tr
@@ -448,22 +468,26 @@ export default function AdminDashboardPage() {
                         onClick={() => setSelectedReport(report)}
                         className="hover:bg-bg/40 cursor-pointer transition-colors"
                       >
-                        <td className="p-3 font-semibold text-accent">#{report.id}</td>
+                        <td className="p-3 font-semibold text-accent whitespace-nowrap">
+                          #{report.id}
+                        </td>
+                        <td className="p-3 whitespace-nowrap" title={fullTs}>
+                          <div className="font-medium text-text">{relTs}</div>
+                          <div className="text-[11px] text-muted">{fullTs}</div>
+                        </td>
                         <td className="p-3 font-medium text-text max-w-xs truncate">
                           {report.title || report.description}
                         </td>
-                        <td className="p-3 text-muted">
-                          {report.location ? `${report.location.block} · ${report.location.room}` : "Campus"}
-                        </td>
-                        <td className="p-3 font-medium">{report.category}</td>
-                        <td className="p-3">
+                        <td className="p-3 text-muted whitespace-nowrap">{locDisplay}</td>
+                        <td className="p-3 font-medium whitespace-nowrap">{report.category}</td>
+                        <td className="p-3 whitespace-nowrap">
                           <PriorityBadge priority={report.priority || "medium"} />
                         </td>
-                        <td className="p-3">
+                        <td className="p-3 whitespace-nowrap">
                           <StatusBadge status={report.status} />
                         </td>
                         {/* Assignee Column */}
-                        <td className="p-3">
+                        <td className="p-3 whitespace-nowrap">
                           <span
                             className={`px-2 py-0.5 rounded-chip text-[11px] font-medium border ${
                               report.assigned_to
@@ -474,8 +498,22 @@ export default function AdminDashboardPage() {
                             {assigneeDisplay}
                           </span>
                         </td>
-                        <td className="p-3 text-muted">
-                          {report.reporter_role || report.reporter?.role || "Student"}
+                        <td className="p-3 text-muted whitespace-nowrap">
+                          Reported by <span className="text-text font-medium">{reporterDisplay}</span>
+                        </td>
+                        <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
+                          {Boolean(report.has_photo) ? (
+                            <button
+                              type="button"
+                              aria-label="View photo proof"
+                              onClick={() => setPhotoLightboxReport(report)}
+                              className="p-1.5 rounded-input border border-border bg-bg text-muted hover:text-accent hover:border-accent inline-flex items-center justify-center"
+                            >
+                              <Camera className="w-3.5 h-3.5 stroke-[1.5]" />
+                            </button>
+                          ) : (
+                            <span className="text-muted text-[11px]">—</span>
+                          )}
                         </td>
                         {/* Lifecycle-Guarded Actions (AC2.4) */}
                         <td className="p-3 text-right" onClick={(e) => e.stopPropagation()}>
@@ -712,6 +750,14 @@ export default function AdminDashboardPage() {
             setSelectedReport(updated);
             apiGetAnalyticsSummary().then((s) => setSummary(s)).catch(() => {});
           }}
+        />
+      )}
+
+      {photoLightboxReport && (
+        <PhotoLightboxModal
+          reportId={photoLightboxReport.id}
+          title={photoLightboxReport.title || photoLightboxReport.description?.slice(0, 48)}
+          onClose={() => setPhotoLightboxReport(null)}
         />
       )}
     </div>

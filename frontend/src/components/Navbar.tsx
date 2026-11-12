@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useTheme } from "@/lib/theme";
 import { useAuth } from "@/lib/auth";
 import { apiGetNotifications, apiMarkNotificationsRead, apiGetMyReports } from "@/lib/api";
+import { formatFullTimestamp, formatRelativeTime } from "@/lib/time";
 import { NotificationItem, Report } from "@/types";
 import {
   Shield,
@@ -435,8 +436,8 @@ export default function Navbar({ onSearchChange, searchValue = "" }: NavbarProps
                         {notifications.slice(0, 6).map((n) => (
                           <div key={n.id} className="p-2 bg-bg border border-border rounded">
                             <p className="text-text font-medium">{n.message}</p>
-                            <p className="text-[10px] text-muted mt-0.5">
-                              {new Date(n.created_at).toLocaleString()}
+                            <p className="text-[10px] text-muted mt-0.5" title={formatFullTimestamp(n.created_at)}>
+                              {formatRelativeTime(n.created_at)} · {formatFullTimestamp(n.created_at)}
                             </p>
                           </div>
                         ))}

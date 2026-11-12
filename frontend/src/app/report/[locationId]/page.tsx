@@ -34,10 +34,13 @@ const CATEGORIES = [
 export default function ReportIncidentPage() {
   const params = useParams();
   const { user, isAuthenticated, loading: authLoading } = useAuth();
-  const locationIdParam = Number(params?.locationId);
+  const rawLocationParam = Number(params?.locationId);
+  const initialLocationParam =
+    Number.isInteger(rawLocationParam) && rawLocationParam > 0 ? String(rawLocationParam) : "";
 
   const [locations, setLocations] = useState<Location[]>([]);
-  const [selectedLocId, setSelectedLocId] = useState<number>(locationIdParam || 1);
+  const [selectedLocId, setSelectedLocId] = useState<string>(initialLocationParam);
+  const [locationError, setLocationError] = useState<string | null>(null);
   const [description, setDescription] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("");
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
@@ -55,17 +58,20 @@ export default function ReportIncidentPage() {
   const [aiUnavailable, setAiUnavailable] = useState(false);
   const debounceTimer = useRef<any>(null);
 
-  // Load locations
+  // Load locations without defaulting to Block 1
   useEffect(() => {
     apiGetLocations().then((res) => {
       setLocations(res.locations);
-      if (res.locations.some((l) => l.id === locationIdParam)) {
-        setSelectedLocId(locationIdParam);
-      } else if (res.locations.length > 0 && !locationIdParam) {
-        setSelectedLocId(res.locations[0].id);
+      if (
+        initialLocationParam &&
+        res.locations.some((l) => l.id === Number(initialLocationParam))
+      ) {
+        setSelectedLocId(initialLocationParam);
+      } else {
+        setSelectedLocId("");
       }
     });
-  }, [locationIdParam]);
+  }, [initialLocationParam]);
 
   // Truthful debounced AI suggestion (>= 15 chars, max 3s timeout)
   useEffect(() => {
@@ -85,12 +91,15 @@ export default function ReportIncidentPage() {
     setAiLoading(true);
     setAiUnavailable(false);
 
+    const parsedLoc = Number(selectedLocId);
+    const predictLocId = Number.isInteger(parsedLoc) && parsedLoc > 0 ? parsedLoc : null;
+
     debounceTimer.current = setTimeout(() => {
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error("Timeout")), 3000)
       );
 
-      Promise.race([apiPredict(text, selectedLocId), timeoutPromise])
+      Promise.race([apiPredict(text, predictLocId), timeoutPromise])
         .then((res: any) => {
           setAiResult(res);
           if (res?.category && !selectedCategory) {
@@ -113,6 +122,14 @@ export default function ReportIncidentPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const locNum = Number(selectedLocId);
+    if (!selectedLocId || !Number.isInteger(locNum) || locNum <= 0) {
+      setLocationError("Please select a building room or area before submitting.");
+      toast.error("Please select a building room or area");
+      return;
+    }
+    setLocationError(null);
+
     if (!description.trim()) {
       toast.error("Please enter an incident description");
       return;
@@ -122,7 +139,7 @@ export default function ReportIncidentPage() {
     try {
       const res = await apiCreateReport({
         description,
-        location_id: selectedLocId,
+        location_id: locNum,
         category: selectedCategory || aiResult?.category || undefined,
         photo_data: photoPreview || undefined,
       });
@@ -292,9 +309,17 @@ export default function ReportIncidentPage() {
                   <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted stroke-[1.5]" />
                   <select
                     value={selectedLocId}
-                    onChange={(e) => setSelectedLocId(Number(e.target.value))}
-                    className="w-full h-10 pl-9 pr-4 bg-bg border border-border rounded-input text-xs text-text focus:border-accent font-medium"
+                    onChange={(e) => {
+                      setSelectedLocId(e.target.value);
+                      if (e.target.value) setLocationError(null);
+                    }}
+                    required
+                    aria-invalid={Boolean(locationError)}
+                    className={`w-full h-10 pl-9 pr-4 bg-bg border rounded-input text-xs text-text focus:border-accent font-medium ${
+                      locationError ? "border-red-500" : "border-border"
+                    }`}
                   >
+                    <option value="">Select building room or area...</option>
                     {locations.map((loc) => (
                       <option key={loc.id} value={loc.id}>
                         {loc.block} · {loc.room} ({loc.location_type || "Classroom"})
@@ -302,6 +327,9 @@ export default function ReportIncidentPage() {
                     ))}
                   </select>
                 </div>
+                {locationError && (
+                  <p className="text-[11px] text-red-500 mt-1">{locationError}</p>
+                )}
               </div>
 
               {/* Description */}

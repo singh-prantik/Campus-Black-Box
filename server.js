@@ -19,6 +19,7 @@ const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const zlib = require("node:zlib");
 const { DatabaseSync } = require("node:sqlite");
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -204,6 +205,83 @@ function validateImageMagicBytes(buf) {
   return null;
 }
 
+function toIsoUtc(dateInput = new Date()) {
+  const d = dateInput instanceof Date ? dateInput : new Date(dateInput);
+  return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+}
+
+function isoHoursAgo(hours) {
+  return new Date(Date.now() - Number(hours || 0) * 3600 * 1000).toISOString();
+}
+
+function normalizeTimestampToIsoUtc(raw) {
+  if (!raw || typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(trimmed)) return trimmed;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$/.test(trimmed)) {
+    return `${trimmed.replace(" ", "T")}Z`;
+  }
+  const parsed = new Date(trimmed.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(trimmed) ? trimmed : `${trimmed}Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function generateSeedProjectorPng(destPath) {
+  if (fs.existsSync(destPath)) return;
+  const width = 120;
+  const height = 75;
+  const stride = 1 + width * 4;
+  const raw = Buffer.alloc(stride * height);
+  for (let y = 0; y < height; y++) {
+    const rowStart = y * stride;
+    raw[rowStart] = 0;
+    for (let x = 0; x < width; x++) {
+      const p = rowStart + 1 + x * 4;
+      const dx = x - 60;
+      const dy = y - 37;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 16) {
+        // Warm projector lens glow
+        raw[p] = 245; raw[p + 1] = 175; raw[p + 2] = 60; raw[p + 3] = 255;
+      } else if (dist < 23) {
+        // Accent ring
+        raw[p] = 47; raw[p + 1] = 91; raw[p + 2] = 255; raw[p + 3] = 255;
+      } else if (x > 16 && x < 104 && y > 14 && y < 61) {
+        // Projector chassis dark slate
+        raw[p] = 30; raw[p + 1] = 36; raw[p + 2] = 48; raw[p + 3] = 255;
+      } else {
+        // Neutral wall backdrop
+        raw[p] = 232; raw[p + 1] = 236; raw[p + 2] = 244; raw[p + 3] = 255;
+      }
+    }
+  }
+  function crc32(buf) {
+    let c = 0xffffffff;
+    for (const b of buf) {
+      c ^= b;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    return (c ^ 0xffffffff) >>> 0;
+  }
+  function chunk(type, data) {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length, 0);
+    const t = Buffer.from(type, "ascii");
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(Buffer.concat([t, data])), 0);
+    return Buffer.concat([len, t, data, crc]);
+  }
+  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  const idat = zlib.deflateSync(raw);
+  const png = Buffer.concat([sig, chunk("IHDR", ihdr), chunk("IDAT", idat), chunk("IEND", Buffer.alloc(0))]);
+  fs.writeFileSync(destPath, png);
+}
+
 // -------------------------------------------------------------
 // 3. DATABASE INITIALIZATION & MIGRATIONS
 // -------------------------------------------------------------
@@ -218,7 +296,7 @@ db.exec(`
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'student',
     department TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
   CREATE TABLE IF NOT EXISTS locations (
@@ -230,7 +308,7 @@ db.exec(`
     longitude REAL NOT NULL,
     location_type TEXT DEFAULT 'classroom',
     qr_token TEXT UNIQUE,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
   CREATE TABLE IF NOT EXISTS reports (
@@ -248,8 +326,8 @@ db.exec(`
     priority_overridden_by INTEGER,
     priority_override_reason TEXT,
     safety_rule_matched TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     resolved_at TEXT,
     FOREIGN KEY(user_id) REFERENCES users(id),
     FOREIGN KEY(location_id) REFERENCES locations(id),
@@ -263,7 +341,7 @@ db.exec(`
     staff_id INTEGER NOT NULL,
     action TEXT NOT NULL,
     remarks TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     FOREIGN KEY(report_id) REFERENCES reports(id),
     FOREIGN KEY(staff_id) REFERENCES users(id)
   );
@@ -274,7 +352,7 @@ db.exec(`
     from_status TEXT,
     to_status TEXT NOT NULL,
     changed_by INTEGER,
-    changed_at TEXT DEFAULT (datetime('now')),
+    changed_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     FOREIGN KEY(report_id) REFERENCES reports(id),
     FOREIGN KEY(changed_by) REFERENCES users(id)
   );
@@ -285,7 +363,7 @@ db.exec(`
     report_id INTEGER NOT NULL,
     message TEXT NOT NULL,
     read_at TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     FOREIGN KEY(user_id) REFERENCES users(id),
     FOREIGN KEY(report_id) REFERENCES reports(id)
   );
@@ -300,7 +378,7 @@ db.exec(`
     duplicate_of INTEGER,
     model_version TEXT DEFAULT 'v1.1-rules-tfidf',
     safety_rule_matched TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     FOREIGN KEY(report_id) REFERENCES reports(id)
   );
 
@@ -309,7 +387,7 @@ db.exec(`
     report_id INTEGER NOT NULL,
     user_id INTEGER NOT NULL,
     text TEXT NOT NULL,
-    created_at TEXT DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     FOREIGN KEY(report_id) REFERENCES reports(id),
     FOREIGN KEY(user_id) REFERENCES users(id)
   );
@@ -321,13 +399,44 @@ db.exec(`
     final_category TEXT NOT NULL,
     corrected_by INTEGER NOT NULL,
     role TEXT NOT NULL,
-    created_at TEXT DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     FOREIGN KEY(report_id) REFERENCES reports(id),
     FOREIGN KEY(corrected_by) REFERENCES users(id)
   );
 `);
 
 // Migrations
+function migrateLegacyTimestampsToIsoUtc() {
+  const tableColumns = [
+    ["users", ["created_at"]],
+    ["locations", ["created_at"]],
+    ["reports", ["created_at", "updated_at", "resolved_at"]],
+    ["resolutions", ["created_at"]],
+    ["status_history", ["changed_at"]],
+    ["notifications", ["read_at", "created_at"]],
+    ["ai_predictions", ["created_at"]],
+    ["report_updates", ["created_at"]],
+    ["category_corrections", ["created_at"]]
+  ];
+
+  for (const [table, cols] of tableColumns) {
+    for (const col of cols) {
+      try {
+        const rows = db.prepare(`SELECT id, ${col} as val FROM ${table} WHERE ${col} IS NOT NULL`).all();
+        const upd = db.prepare(`UPDATE ${table} SET ${col} = ? WHERE id = ?`);
+        for (const row of rows) {
+          if (typeof row.val === "string" && !row.val.endsWith("Z")) {
+            const iso = normalizeTimestampToIsoUtc(row.val);
+            if (iso && iso !== row.val) {
+              upd.run(iso, row.id);
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+}
+
 try {
   const locCols = db.prepare("PRAGMA table_info(locations)").all();
   if (!locCols.some(c => c.name === "qr_token")) {
@@ -357,6 +466,8 @@ try {
     db.exec("ALTER TABLE ai_predictions ADD COLUMN safety_rule_matched TEXT");
   }
 } catch {}
+
+migrateLegacyTimestampsToIsoUtc();
 
 // -------------------------------------------------------------
 // 4. AI & INTELLIGENCE ENGINE (TF-IDF, Duplicate, Safety Rules)
@@ -664,7 +775,7 @@ function seedData(forceReset = false) {
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'student',
       department TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     );
 
     CREATE TABLE IF NOT EXISTS locations (
@@ -676,7 +787,7 @@ function seedData(forceReset = false) {
       longitude REAL NOT NULL,
       location_type TEXT DEFAULT 'classroom',
       qr_token TEXT UNIQUE,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     );
 
     CREATE TABLE IF NOT EXISTS reports (
@@ -694,8 +805,8 @@ function seedData(forceReset = false) {
       priority_overridden_by INTEGER,
       priority_override_reason TEXT,
       safety_rule_matched TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now')),
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       resolved_at TEXT,
       FOREIGN KEY(user_id) REFERENCES users(id),
       FOREIGN KEY(location_id) REFERENCES locations(id),
@@ -709,7 +820,7 @@ function seedData(forceReset = false) {
       staff_id INTEGER NOT NULL,
       action TEXT NOT NULL,
       remarks TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       FOREIGN KEY(report_id) REFERENCES reports(id),
       FOREIGN KEY(staff_id) REFERENCES users(id)
     );
@@ -720,7 +831,7 @@ function seedData(forceReset = false) {
       from_status TEXT,
       to_status TEXT NOT NULL,
       changed_by INTEGER,
-      changed_at TEXT DEFAULT (datetime('now')),
+      changed_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       FOREIGN KEY(report_id) REFERENCES reports(id),
       FOREIGN KEY(changed_by) REFERENCES users(id)
     );
@@ -731,7 +842,7 @@ function seedData(forceReset = false) {
       report_id INTEGER NOT NULL,
       message TEXT NOT NULL,
       read_at TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       FOREIGN KEY(user_id) REFERENCES users(id),
       FOREIGN KEY(report_id) REFERENCES reports(id)
     );
@@ -746,7 +857,7 @@ function seedData(forceReset = false) {
       duplicate_of INTEGER,
       model_version TEXT DEFAULT 'v1.1-rules-tfidf',
       safety_rule_matched TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       FOREIGN KEY(report_id) REFERENCES reports(id)
     );
 
@@ -755,7 +866,7 @@ function seedData(forceReset = false) {
       report_id INTEGER NOT NULL,
       user_id INTEGER NOT NULL,
       text TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       FOREIGN KEY(report_id) REFERENCES reports(id),
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
@@ -767,7 +878,7 @@ function seedData(forceReset = false) {
       final_category TEXT NOT NULL,
       corrected_by INTEGER NOT NULL,
       role TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       FOREIGN KEY(report_id) REFERENCES reports(id),
       FOREIGN KEY(corrected_by) REFERENCES users(id)
     );
@@ -817,6 +928,8 @@ function seedData(forceReset = false) {
     insertLoc.run(l.id, l.block, l.room, l.floor, l.lat, l.lng, l.type, l.qr);
   }
 
+  generateSeedProjectorPng(path.join(UPLOADS_DIR, "seed_projector_evidence.png"));
+
   // Seed 8 Sample Reports with strict rule conformance:
   const sampleReports = [
     {
@@ -829,7 +942,7 @@ function seedData(forceReset = false) {
       safetyRule: null,
       status: "in_progress",
       assignedTo: 3, // Technician 1
-      photo: "/samples/projector.webp",
+      photo: "/api/photos/seed_projector_evidence.png",
       ageHours: 4,
       resolvedAt: null
     },
@@ -843,7 +956,7 @@ function seedData(forceReset = false) {
       safetyRule: null,
       status: "pending",
       assignedTo: null,
-      photo: "/samples/ceiling-fan.webp",
+      photo: null,
       ageHours: 6,
       resolvedAt: null
     },
@@ -857,7 +970,7 @@ function seedData(forceReset = false) {
       safetyRule: null,
       status: "assigned",
       assignedTo: 3, // Technician 1
-      photo: "/samples/water-leak.webp",
+      photo: null,
       ageHours: 8,
       resolvedAt: null
     },
@@ -871,7 +984,7 @@ function seedData(forceReset = false) {
       safetyRule: "exposed_sparking_wire",
       status: "assigned",
       assignedTo: 4, // Technician 2
-      photo: "/samples/exposed-wire.webp",
+      photo: null,
       ageHours: 2,
       resolvedAt: null
     },
@@ -885,7 +998,7 @@ function seedData(forceReset = false) {
       safetyRule: null,
       status: "pending",
       assignedTo: null,
-      photo: "/samples/wifi-deadzone.webp",
+      photo: null,
       ageHours: 14,
       resolvedAt: null
     },
@@ -899,9 +1012,9 @@ function seedData(forceReset = false) {
       safetyRule: null,
       status: "resolved",
       assignedTo: 3, // Technician 1
-      photo: "/samples/broken-chair.webp",
+      photo: null,
       ageHours: 24,
-      resolvedAt: new Date(Date.now() - 3 * 3600 * 1000).toISOString()
+      resolvedAt: isoHoursAgo(3)
     },
     {
       id: 7,
@@ -913,7 +1026,7 @@ function seedData(forceReset = false) {
       safetyRule: null,
       status: "in_progress",
       assignedTo: 4, // Technician 2
-      photo: "/samples/dark-corridor.webp",
+      photo: null,
       ageHours: 18,
       resolvedAt: null
     },
@@ -927,7 +1040,7 @@ function seedData(forceReset = false) {
       safetyRule: null,
       status: "pending",
       assignedTo: null,
-      photo: "/samples/dirty-washroom.webp",
+      photo: null,
       ageHours: 7,
       resolvedAt: null
     }
@@ -938,33 +1051,35 @@ function seedData(forceReset = false) {
       id, user_id, location_id, description, category, suggested_category,
       priority, safety_rule_matched, status, photo_url, photo_path, assigned_to,
       created_at, updated_at, resolved_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', ?), datetime('now'), ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const insertResolution = db.prepare(`
     INSERT INTO resolutions (report_id, staff_id, action, remarks, created_at)
-    VALUES (?, ?, ?, ?, datetime('now', ?))
+    VALUES (?, ?, ?, ?, ?)
   `);
 
   const insertPrediction = db.prepare(`
     INSERT INTO ai_predictions (
       report_id, predicted_category, category_confidence, priority_score, duplicate_score,
-      model_version, safety_rule_matched
-    ) VALUES (?, ?, ?, ?, ?, 'v1.1-rules-tfidf', ?)
+      model_version, safety_rule_matched, created_at
+    ) VALUES (?, ?, ?, ?, ?, 'v1.1-rules-tfidf', ?, ?)
   `);
 
   const insertStatusHistory = db.prepare(`
     INSERT INTO status_history (report_id, from_status, to_status, changed_by, changed_at)
-    VALUES (?, ?, ?, ?, datetime('now', ?))
+    VALUES (?, ?, ?, ?, ?)
   `);
 
   const insertNotification = db.prepare(`
     INSERT INTO notifications (user_id, report_id, message, read_at, created_at)
-    VALUES (?, ?, ?, ?, datetime('now', ?))
+    VALUES (?, ?, ?, ?, ?)
   `);
 
+  const nowIso = toIsoUtc();
   for (const r of sampleReports) {
-    const ageOffset = `-${r.ageHours} hours`;
+    const createdIso = isoHoursAgo(r.ageHours);
+    const updatedIso = r.resolvedAt || createdIso;
     insertReport.run(
       r.id,
       r.userId,
@@ -978,66 +1093,70 @@ function seedData(forceReset = false) {
       r.photo,
       r.photo,
       r.assignedTo,
-      ageOffset,
+      createdIso,
+      updatedIso,
       r.resolvedAt
     );
 
-    insertPrediction.run(r.id, r.cat, 0.95, r.prio, 0.10, r.safetyRule);
+    insertPrediction.run(r.id, r.cat, 0.95, r.prio, 0.10, r.safetyRule, createdIso);
 
     // Initial status history: creation
-    insertStatusHistory.run(r.id, null, "pending", r.userId, ageOffset);
+    insertStatusHistory.run(r.id, null, "pending", r.userId, createdIso);
 
     if (r.status === "assigned" || r.status === "in_progress" || r.status === "resolved") {
+      const assignedIso = isoHoursAgo(Math.max(1, r.ageHours - 1));
       insertResolution.run(
         r.id,
         5, // Admin
         `Assigned incident to maintenance staff (#${r.assignedTo})`,
         "Work order dispatched",
-        ageOffset
+        assignedIso
       );
-      insertStatusHistory.run(r.id, "pending", "assigned", 5, ageOffset);
+      insertStatusHistory.run(r.id, "pending", "assigned", 5, assignedIso);
     }
 
     if (r.status === "in_progress" || r.status === "resolved") {
+      const inProgressIso = isoHoursAgo(Math.max(0.5, r.ageHours - 2));
       insertResolution.run(
         r.id,
         r.assignedTo,
         "Technician accepted work order and started on-site diagnostic",
         "Tools prepped",
-        ageOffset
+        inProgressIso
       );
-      insertStatusHistory.run(r.id, "assigned", "in_progress", r.assignedTo, ageOffset);
+      insertStatusHistory.run(r.id, "assigned", "in_progress", r.assignedTo, inProgressIso);
     }
 
     if (r.status === "resolved") {
+      const resolvedIso = r.resolvedAt || isoHoursAgo(3);
       insertResolution.run(
         r.id,
         r.assignedTo,
         "Replaced damaged chair structural backrest and verified load stability",
         "Tested safe for student use",
-        "-3 hours"
+        resolvedIso
       );
-      insertStatusHistory.run(r.id, "in_progress", "resolved", r.assignedTo, "-3 hours");
-      insertNotification.run(r.userId, r.id, "Your incident #6 has been resolved: Replaced damaged chair structural backrest", "-2 hours", "-3 hours");
+      insertStatusHistory.run(r.id, "in_progress", "resolved", r.assignedTo, resolvedIso);
+      insertNotification.run(r.userId, r.id, "Your incident #6 has been resolved: Replaced damaged chair structural backrest", isoHoursAgo(2), resolvedIso);
     }
   }
 
   // Seed sample report updates (Goal 3a)
   db.prepare(`
     INSERT INTO report_updates (report_id, user_id, text, created_at)
-    VALUES (1, 1, 'Observed projector display flickers every 10 seconds during morning lecture', datetime('now', '-2 hours'))
-  `).run();
+    VALUES (1, 1, 'Observed projector display flickers every 10 seconds during morning lecture', ?)
+  `).run(isoHoursAgo(2));
 
   // Seed sample category corrections (Goal 3c)
   db.prepare(`
     INSERT INTO category_corrections (report_id, suggested_category, final_category, corrected_by, role, created_at)
-    VALUES (2, 'Equipment', 'Electrical', 2, 'faculty', datetime('now', '-5 hours'))
-  `).run();
+    VALUES (2, 'Equipment', 'Electrical', 2, 'faculty', ?)
+  `).run(isoHoursAgo(5));
 
   // Active notifications
-  insertNotification.run(1, 4, "Your incident #4 status updated to Assigned", null, "-1 hour");
-  insertNotification.run(2, 1, "Your incident #1 status updated to In progress", null, "-2 hours");
-  insertNotification.run(2, 3, "Your incident #3 status updated to Assigned", null, "-7 hours");
+  insertNotification.run(1, 4, "Your incident #4 status updated to Assigned", null, isoHoursAgo(1));
+  insertNotification.run(2, 1, "Your incident #1 status updated to In progress", null, isoHoursAgo(2));
+  insertNotification.run(2, 3, "Your incident #3 status updated to Assigned", null, isoHoursAgo(7));
 
   console.log("Database seeded successfully with authenticated users and strict lifecycle rules!");
 }
@@ -1049,6 +1168,11 @@ try {
   const existingReports = db.prepare("SELECT COUNT(*) as c FROM reports").get().c;
   if (existingUsers < 6 || existingLocations < 9 || existingReports === 0) {
     seedData(true);
+  }
+  migrateLegacyTimestampsToIsoUtc();
+  const seededPhotoRow = db.prepare("SELECT id FROM reports WHERE photo_path = ? OR photo_url = ? LIMIT 1").get("/api/photos/seed_projector_evidence.png", "/api/photos/seed_projector_evidence.png");
+  if (seededPhotoRow) {
+    generateSeedProjectorPng(path.join(UPLOADS_DIR, "seed_projector_evidence.png"));
   }
 } catch {
   seedData(true);
@@ -1134,6 +1258,67 @@ function buildReporterReportPayload(row, extras = {}) {
     timeline,
     updates
   };
+}
+
+function buildStaffReportPayload(row) {
+  if (!row) return null;
+  const hasPhoto = Boolean(row.photo_path || row.photo_url);
+  const block = row.block ?? null;
+  const room = row.room ?? null;
+  const locationType = row.location_type ?? null;
+  const payload = {
+    id: row.id,
+    user_id: row.user_id,
+    location_id: row.location_id ?? null,
+    description: row.description,
+    category: row.category,
+    suggested_category: row.suggested_category ?? null,
+    priority: row.priority,
+    status: row.status,
+    has_photo: hasPhoto,
+    assigned_to: row.assigned_to ?? null,
+    assignee_name: row.assignee_name ?? null,
+    priority_overridden_by: row.priority_overridden_by ?? null,
+    priority_override_reason: row.priority_override_reason ?? null,
+    safety_rule_matched: row.safety_rule_matched ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at ?? null,
+    resolved_at: row.resolved_at ?? null,
+    block,
+    room,
+    location_type: locationType,
+    location: (block || room) ? {
+      id: row.location_id ?? null,
+      block,
+      room,
+      location_type: locationType,
+      ...(row.latitude !== undefined ? { latitude: row.latitude } : {}),
+      ...(row.longitude !== undefined ? { longitude: row.longitude } : {})
+    } : null,
+    reporter_name: row.reporter_name ?? null,
+    reporter_role: row.reporter_role ?? null,
+    similar_updates_count: row.similar_updates_count !== undefined ? Number(row.similar_updates_count) || 0 : 0,
+    category_confidence: row.category_confidence ?? null,
+    duplicate_score: row.duplicate_score ?? null,
+    duplicate_of: row.duplicate_of ?? null,
+    model_version: row.model_version ?? null
+  };
+  return payload;
+}
+
+function fetchSanitizedStaffReportById(reportId) {
+  const row = db.prepare(`
+    SELECT r.*, u.name as reporter_name, u.role as reporter_role,
+           l.block, l.room, l.location_type, a.name as assignee_name,
+           ap.category_confidence, ap.duplicate_score, ap.duplicate_of, ap.model_version
+    FROM reports r
+    LEFT JOIN users u ON r.user_id = u.id
+    LEFT JOIN locations l ON r.location_id = l.id
+    LEFT JOIN users a ON r.assigned_to = a.id
+    LEFT JOIN ai_predictions ap ON r.id = ap.report_id
+    WHERE r.id = ?
+  `).get(reportId);
+  return buildStaffReportPayload(row);
 }
 
 function getCorsHeaders(req) {
@@ -1395,7 +1580,8 @@ async function handleRequest(req, res) {
 
     const body = await parseRequestBody(req);
     const text = (body.description || "").trim();
-    const locId = Number(body.location_id) || 1;
+    const rawLocId = Number(body.location_id);
+    const locId = Number.isInteger(rawLocId) && rawLocId > 0 ? rawLocId : null;
 
     // Rule: if text < 15 characters, neutral state
     if (text.length < 15) {
@@ -1408,7 +1594,9 @@ async function handleRequest(req, res) {
     }
 
     const catResult = classifyCategory(text);
-    const dupResult = detectDuplicates(text, locId);
+    const dupResult = locId
+      ? detectDuplicates(text, locId)
+      : { isDuplicate: false, matchScore: 0, matchedReportId: null };
 
     return sendJson(res, 200, {
       category: catResult.category,
@@ -1431,11 +1619,12 @@ async function handleRequest(req, res) {
     const report = db.prepare("SELECT user_id, assigned_to FROM reports WHERE photo_path LIKE ?").get(`%${filename}`);
     if (report) {
       const isOwner = user.aud === "reporter" && user.id === report.user_id;
-      const isStaff = user.aud === "staff";
-      if (!isOwner && !isStaff) {
+      const isAdmin = user.aud === "staff" && (user.role === "admin" || user.role === "super_admin");
+      const isAssignedTech = user.aud === "staff" && user.role === "maintenance" && report.assigned_to === user.id;
+      if (!isOwner && !isAdmin && !isAssignedTech) {
         return sendJson(res, 403, { detail: "Forbidden: You are not authorized to view this photo" });
       }
-    } else if (user.aud !== "staff") {
+    } else if (user.aud !== "staff" || user.role === "maintenance") {
       return sendJson(res, 403, { detail: "Forbidden: You are not authorized to view this photo" });
     }
 
@@ -1487,22 +1676,23 @@ async function handleRequest(req, res) {
       return sendJson(res, 400, { detail: "Update text must not exceed 1000 characters" });
     }
 
+    const updateCreatedAt = toIsoUtc();
     const resUpdate = db.prepare(`
       INSERT INTO report_updates (report_id, user_id, text, created_at)
-      VALUES (?, ?, ?, datetime('now'))
-    `).run(reportId, user.id, text);
+      VALUES (?, ?, ?, ?)
+    `).run(reportId, user.id, text, updateCreatedAt);
 
     // In-app notification
     db.prepare(`
       INSERT INTO notifications (user_id, report_id, message, created_at)
-      VALUES (?, ?, ?, datetime('now'))
-    `).run(user.id, reportId, `You added notes to incident #${reportId}`);
+      VALUES (?, ?, ?, ?)
+    `).run(user.id, reportId, `You added notes to incident #${reportId}`, updateCreatedAt);
 
     if (report.user_id !== user.id) {
       db.prepare(`
         INSERT INTO notifications (user_id, report_id, message, created_at)
-        VALUES (?, ?, ?, datetime('now'))
-      `).run(report.user_id, reportId, `A student/faculty member added additional details to your report #${reportId}`);
+        VALUES (?, ?, ?, ?)
+      `).run(report.user_id, reportId, `A student/faculty member added additional details to your report #${reportId}`, updateCreatedAt);
     }
 
     return sendJson(res, 201, {
@@ -1538,7 +1728,7 @@ async function handleRequest(req, res) {
     if (description.length > 1000) {
       return sendJson(res, 400, { detail: "Description must not exceed 1000 characters" });
     }
-    if (!locationId || isNaN(locationId)) {
+    if (!locationId || !Number.isInteger(locationId) || locationId <= 0) {
       return sendJson(res, 400, { detail: "Valid location_id is required" });
     }
 
@@ -1549,7 +1739,7 @@ async function handleRequest(req, res) {
 
     // Photo processing (base64 JSON, magic bytes check, max 5MB)
     let photoPath = null;
-    let photoUrl = body.photo_url || null;
+    let photoUrl = null;
 
     if (body.photo_data) {
       let rawBase64 = String(body.photo_data);
@@ -1579,12 +1769,13 @@ async function handleRequest(req, res) {
     const userCategory = body.category && body.category !== "Other" ? body.category : catResult.category;
     const prioResult = computePriority(description, userCategory, dupResult.isDuplicate ? 2 : 0);
 
+    const nowIso = toIsoUtc();
     const insert = db.prepare(`
       INSERT INTO reports (
         user_id, location_id, description, category, suggested_category,
         priority, status, photo_url, photo_path, assigned_to,
         safety_rule_matched, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, NULL, ?, datetime('now'), datetime('now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, NULL, ?, ?, ?)
     `);
 
     const result = insert.run(
@@ -1596,7 +1787,9 @@ async function handleRequest(req, res) {
       prioResult.priority,
       photoUrl,
       photoPath,
-      prioResult.safety_rule_matched
+      prioResult.safety_rule_matched,
+      nowIso,
+      nowIso
     );
 
     const reportId = Number(result.lastInsertRowid);
@@ -1604,23 +1797,23 @@ async function handleRequest(req, res) {
     // Initial status_history record (creation)
     db.prepare(`
       INSERT INTO status_history (report_id, from_status, to_status, changed_by, changed_at)
-      VALUES (?, NULL, 'pending', ?, datetime('now'))
-    `).run(reportId, user.id);
+      VALUES (?, NULL, 'pending', ?, ?)
+    `).run(reportId, user.id, nowIso);
 
     // Category correction loop (FR-17, AC6.6)
     if (userCategory !== catResult.category) {
       db.prepare(`
         INSERT INTO category_corrections (report_id, suggested_category, final_category, corrected_by, role, created_at)
-        VALUES (?, ?, ?, ?, ?, datetime('now'))
-      `).run(reportId, catResult.category, userCategory, user.id, user.role);
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(reportId, catResult.category, userCategory, user.id, user.role, nowIso);
     }
 
     // Record AI Telemetry (FR-21, AC6.7)
     db.prepare(`
       INSERT INTO ai_predictions (
         report_id, predicted_category, category_confidence, priority_score,
-        duplicate_score, duplicate_of, model_version, safety_rule_matched
-      ) VALUES (?, ?, ?, ?, ?, ?, 'v1.1-rules-tfidf', ?)
+        duplicate_score, duplicate_of, model_version, safety_rule_matched, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'v1.1-rules-tfidf', ?, ?)
     `).run(
       reportId,
       catResult.category,
@@ -1628,7 +1821,8 @@ async function handleRequest(req, res) {
       prioResult.priority_score,
       dupResult.matchScore,
       dupResult.matchedReportId,
-      prioResult.safety_rule_matched
+      prioResult.safety_rule_matched,
+      nowIso
     );
 
     const createdReport = db.prepare(`
@@ -1763,7 +1957,7 @@ async function handleRequest(req, res) {
     if (user.aud !== "reporter") return sendJson(res, 403, { detail: "Forbidden: Reporter portal access required" });
 
     const notifId = Number(notifReadMatch[1]);
-    db.prepare("UPDATE notifications SET read_at = datetime('now') WHERE id = ? AND user_id = ?").run(notifId, user.id);
+    db.prepare("UPDATE notifications SET read_at = ? WHERE id = ? AND user_id = ?").run(toIsoUtc(), notifId, user.id);
     return sendJson(res, 200, { success: true });
   }
 
@@ -1772,7 +1966,7 @@ async function handleRequest(req, res) {
     if (!user) return sendJson(res, 401, { detail: "Authentication required" });
     if (user.aud !== "reporter") return sendJson(res, 403, { detail: "Forbidden: Reporter portal access required" });
 
-    db.prepare("UPDATE notifications SET read_at = datetime('now') WHERE user_id = ? AND read_at IS NULL").run(user.id);
+    db.prepare("UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL").run(toIsoUtc(), user.id);
     return sendJson(res, 200, { success: true });
   }
 
@@ -1784,13 +1978,14 @@ async function handleRequest(req, res) {
       return sendJson(res, 403, { detail: "Forbidden: Reporter portal access required. Staff must query /api/staff/reports" });
     }
     const rows = db.prepare(`
-      SELECT r.id, r.description, r.category, r.status, r.photo_url, r.photo_path,
+      SELECT DISTINCT r.id, r.description, r.category, r.status, r.photo_url, r.photo_path,
              r.created_at, r.updated_at, r.resolved_at, l.block, l.room, l.location_type
       FROM reports r
       LEFT JOIN locations l ON r.location_id = l.id
-      WHERE r.user_id = ?
+      LEFT JOIN report_updates ru ON r.id = ru.report_id
+      WHERE r.user_id = ? OR ru.user_id = ?
       ORDER BY r.created_at DESC
-    `).all(user.id);
+    `).all(user.id, user.id);
     const reports = rows.map(row => buildReporterReportPayload(row));
     return sendJson(res, 200, { reports });
   }
@@ -1838,10 +2033,10 @@ async function handleRequest(req, res) {
 
       let query = `
         SELECT r.*,
-               u.name as reporter_name, u.role as reporter_role, u.email as reporter_email,
-               l.block, l.room, l.latitude, l.longitude,
+               u.name as reporter_name, u.role as reporter_role,
+               l.block, l.room, l.location_type, l.latitude, l.longitude,
                s.name as assignee_name, s.role as assignee_role,
-               p.category_confidence, p.duplicate_score,
+               p.category_confidence, p.duplicate_score, p.duplicate_of, p.model_version,
                COALESCE(upd.cnt, 0) as similar_updates_count
         FROM reports r
         LEFT JOIN users u ON r.user_id = u.id
@@ -1881,29 +2076,64 @@ async function handleRequest(req, res) {
       }
 
       query += " ORDER BY r.created_at DESC";
-      const reports = db.prepare(query).all(...params);
+      const rows = db.prepare(query).all(...params);
+      const reports = rows.map(row => buildStaffReportPayload(row));
       return sendJson(res, 200, { reports, total: reports.length });
+    }
+
+    // 1b. Staff: Authenticated Photo Proof Stream (GET /api/staff/reports/:id/photo)
+    const staffPhotoMatch = pathname.match(/^\/api\/staff\/reports\/(\d+)\/photo$/);
+    if (staffPhotoMatch && method === "GET") {
+      const reportId = Number(staffPhotoMatch[1]);
+      const report = db.prepare("SELECT id, assigned_to, photo_path, photo_url FROM reports WHERE id = ?").get(reportId);
+      if (!report) {
+        return sendJson(res, 404, { detail: "Report not found" });
+      }
+      if (user.role === "maintenance" && report.assigned_to !== user.id) {
+        return sendJson(res, 403, { detail: "Forbidden: You can only view photos for tickets assigned to you" });
+      }
+
+      const rawPhoto = report.photo_path || report.photo_url || "";
+      if (!rawPhoto) {
+        return sendJson(res, 404, { detail: "Report has no photo proof" });
+      }
+      const safeName = path.basename(String(rawPhoto));
+      const filePath = path.join(UPLOADS_DIR, safeName);
+      if (!safeName || !fs.existsSync(filePath)) {
+        return sendJson(res, 404, { detail: "Photo unavailable" });
+      }
+
+      const ext = path.extname(filePath).toLowerCase();
+      const mimeTypes = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp" };
+      res.writeHead(200, {
+        "Content-Type": mimeTypes[ext] || "application/octet-stream",
+        "Cache-Control": "private, max-age=300",
+        ...(res._corsHeaders || getCorsHeaders(req))
+      });
+      return fs.createReadStream(filePath).pipe(res);
     }
 
     // 2. Staff: Single Report Detail
     const staffRepDetail = pathname.match(/^\/api\/staff\/reports\/(\d+)$/);
     if (staffRepDetail && method === "GET") {
       const reportId = Number(staffRepDetail[1]);
-      const report = db.prepare(`
+      const rawReport = db.prepare(`
         SELECT r.*,
-               u.name as reporter_name, u.role as reporter_role, u.email as reporter_email,
-               l.block, l.room, l.latitude, l.longitude,
-               s.name as assignee_name, s.role as assignee_role
+               u.name as reporter_name, u.role as reporter_role,
+               l.block, l.room, l.location_type, l.latitude, l.longitude,
+               s.name as assignee_name, s.role as assignee_role,
+               ap.category_confidence, ap.duplicate_score, ap.duplicate_of, ap.model_version
         FROM reports r
         LEFT JOIN users u ON r.user_id = u.id
         LEFT JOIN locations l ON r.location_id = l.id
         LEFT JOIN users s ON r.assigned_to = s.id
+        LEFT JOIN ai_predictions ap ON r.id = ap.report_id
         WHERE r.id = ?
       `).get(reportId);
 
-      if (!report) return sendJson(res, 404, { detail: "Report not found" });
+      if (!rawReport) return sendJson(res, 404, { detail: "Report not found" });
 
-      if (user.role === "maintenance" && report.assigned_to !== user.id) {
+      if (user.role === "maintenance" && rawReport.assigned_to !== user.id) {
         return sendJson(res, 403, { detail: "Forbidden: You can only view tickets assigned to you" });
       }
 
@@ -1923,7 +2153,7 @@ async function handleRequest(req, res) {
         ORDER BY ru.created_at ASC
       `).all(reportId);
 
-      return sendJson(res, 200, { report, resolutions, updates });
+      return sendJson(res, 200, { report: buildStaffReportPayload(rawReport), resolutions, updates });
     }
 
     // 3. Staff: Priority Override (PATCH /api/staff/reports/:id/priority) (FR-18, FR-19, Goal 3b)
@@ -1949,11 +2179,11 @@ async function handleRequest(req, res) {
           priority = ?,
           priority_overridden_by = ?,
           priority_override_reason = ?,
-          updated_at = datetime('now')
+          updated_at = ?
         WHERE id = ?
-      `).run(newPrio, user.id, reason, reportId);
+      `).run(newPrio, user.id, reason, toIsoUtc(), reportId);
 
-      const updated = db.prepare("SELECT * FROM reports WHERE id = ?").get(reportId);
+      const updated = fetchSanitizedStaffReportById(reportId);
       return sendJson(res, 200, { success: true, report: updated });
     }
 
@@ -1974,19 +2204,20 @@ async function handleRequest(req, res) {
         return sendJson(res, 400, { detail: "Invalid category selection" });
       }
 
+      const nowIso = toIsoUtc();
       db.prepare(`
         INSERT INTO category_corrections (report_id, suggested_category, final_category, corrected_by, role, created_at)
-        VALUES (?, ?, ?, ?, ?, datetime('now'))
-      `).run(reportId, report.category, newCat, user.id, user.role);
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(reportId, report.category, newCat, user.id, user.role, nowIso);
 
       db.prepare(`
         UPDATE reports SET
           category = ?,
-          updated_at = datetime('now')
+          updated_at = ?
         WHERE id = ?
-      `).run(newCat, reportId);
+      `).run(newCat, nowIso, reportId);
 
-      const updated = db.prepare("SELECT * FROM reports WHERE id = ?").get(reportId);
+      const updated = fetchSanitizedStaffReportById(reportId);
       return sendJson(res, 200, { success: true, report: updated });
     }
 
@@ -2013,43 +2244,211 @@ async function handleRequest(req, res) {
       return res.end(csv);
     }
 
-    // 6. Staff: Block Heat Map Drill-down Summary (GET /api/staff/blocks/:block/summary) (FR-15, FR-25, AC6.9)
+    // 6. Staff: All-Blocks Heat Map Summary (GET /api/staff/blocks/summary?window=7d|30d|all)
+    if (pathname === "/api/staff/blocks/summary" && method === "GET") {
+      const windowParam = parsedUrl.searchParams.get("window") || "all";
+      if (!["7d", "30d", "all"].includes(windowParam)) {
+        return sendJson(res, 400, { detail: `Invalid window parameter '${windowParam}'. Allowed: 7d, 30d, all` });
+      }
+
+      let cutoffIso = null;
+      if (windowParam === "7d") cutoffIso = isoHoursAgo(7 * 24);
+      if (windowParam === "30d") cutoffIso = isoHoursAgo(30 * 24);
+
+      const allBlockRows = db.prepare(`
+        SELECT block, COUNT(*) as location_count
+        FROM locations
+        GROUP BY block
+        ORDER BY block ASC
+      `).all();
+
+      const reportQuery = `
+        SELECT r.*,
+               u.name as reporter_name, u.role as reporter_role,
+               l.block, l.room, l.location_type, l.latitude, l.longitude,
+               s.name as assignee_name, s.role as assignee_role,
+               ap.category_confidence, ap.duplicate_score, ap.duplicate_of, ap.model_version
+        FROM reports r
+        JOIN locations l ON r.location_id = l.id
+        LEFT JOIN users u ON r.user_id = u.id
+        LEFT JOIN users s ON r.assigned_to = s.id
+        LEFT JOIN ai_predictions ap ON r.id = ap.report_id
+        ${cutoffIso ? "WHERE r.created_at >= ?" : ""}
+        ORDER BY r.created_at DESC, r.id DESC
+      `;
+      const filteredReports = cutoffIso
+        ? db.prepare(reportQuery).all(cutoffIso)
+        : db.prepare(reportQuery).all();
+
+      const blocks = allBlockRows.map(blk => {
+        const blkReports = filteredReports.filter(r => r.block === blk.block);
+        let pending = 0;
+        let assigned = 0;
+        let inProgress = 0;
+        let resolved = 0;
+        const catCounts = new Map();
+        const resHours = [];
+
+        for (const r of blkReports) {
+          if (r.status === "pending") pending += 1;
+          else if (r.status === "assigned") assigned += 1;
+          else if (r.status === "in_progress") inProgress += 1;
+          else if (r.status === "resolved") resolved += 1;
+
+          catCounts.set(r.category, (catCounts.get(r.category) || 0) + 1);
+          if (r.status === "resolved" && r.resolved_at) {
+            const diffMs = Date.parse(r.resolved_at) - Date.parse(r.created_at);
+            if (!Number.isNaN(diffMs)) {
+              resHours.push(Math.max(0, diffMs / (3600 * 1000)));
+            }
+          }
+        }
+
+        const topCategories = Array.from(catCounts.entries())
+          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+          .slice(0, 3)
+          .map(([category, count]) => ({ category, count }));
+
+        const avgResolutionHours = resHours.length > 0
+          ? Number((resHours.reduce((a, b) => a + b, 0) / resHours.length).toFixed(1))
+          : 0;
+
+        const visibleIncidents = (user.role === "maintenance"
+          ? blkReports.filter(r => r.assigned_to === user.id)
+          : blkReports
+        ).map(row => buildStaffReportPayload(row));
+
+        return {
+          block: blk.block,
+          location_count: blk.location_count,
+          total: blkReports.length,
+          pending,
+          assigned,
+          in_progress: inProgress,
+          resolved,
+          open: pending + assigned + inProgress,
+          has_resolved: resHours.length > 0,
+          avg_resolution_hours: avgResolutionHours,
+          top_categories: topCategories,
+          incidents: visibleIncidents
+        };
+      });
+
+      const allResHours = [];
+      let totalPending = 0;
+      let totalAssigned = 0;
+      let totalInProgress = 0;
+      let totalResolved = 0;
+      for (const r of filteredReports) {
+        if (r.status === "pending") totalPending += 1;
+        else if (r.status === "assigned") totalAssigned += 1;
+        else if (r.status === "in_progress") totalInProgress += 1;
+        else if (r.status === "resolved") {
+          totalResolved += 1;
+          if (r.resolved_at) {
+            const diffMs = Date.parse(r.resolved_at) - Date.parse(r.created_at);
+            if (!Number.isNaN(diffMs)) allResHours.push(Math.max(0, diffMs / (3600 * 1000)));
+          }
+        }
+      }
+
+      const totals = {
+        total_reports: filteredReports.length,
+        pending_reports: totalPending,
+        assigned_reports: totalAssigned,
+        in_progress_reports: totalInProgress,
+        resolved_reports: totalResolved,
+        open_reports: totalPending + totalAssigned + totalInProgress,
+        has_resolved_tickets: allResHours.length > 0,
+        avg_resolution_hours: allResHours.length > 0
+          ? Number((allResHours.reduce((a, b) => a + b, 0) / allResHours.length).toFixed(1))
+          : 0,
+        busiest_open_count: blocks.reduce((mx, b) => Math.max(mx, b.open), 0)
+      };
+
+      return sendJson(res, 200, {
+        window: windowParam,
+        totals,
+        blocks,
+        notice: "Patterns are leads to investigate, not proven causes."
+      });
+    }
+
+    // 6b. Staff: Single Block Heat Map Drill-down Summary (GET /api/staff/blocks/:block/summary) (FR-15, FR-25, AC6.9)
     const blockMatch = pathname.match(/^\/api\/staff\/blocks\/([^\/]+)\/summary$/);
     if (blockMatch && method === "GET") {
-      const blockName = decodeURIComponent(blockMatch[1]);
-      const total = db.prepare("SELECT COUNT(*) as c FROM reports r JOIN locations l ON r.location_id = l.id WHERE l.block = ?").get(blockName).c;
-      const open = db.prepare("SELECT COUNT(*) as c FROM reports r JOIN locations l ON r.location_id = l.id WHERE l.block = ? AND r.status != 'resolved'").get(blockName).c;
-      const resolved = db.prepare("SELECT COUNT(*) as c FROM reports r JOIN locations l ON r.location_id = l.id WHERE l.block = ? AND r.status = 'resolved'").get(blockName).c;
-
-      const topCats = db.prepare(`
-        SELECT r.category, COUNT(*) as count
-        FROM reports r
-        JOIN locations l ON r.location_id = l.id
-        WHERE l.block = ?
-        GROUP BY r.category
-        ORDER BY count DESC
-      `).all(blockName);
-
-      const resolvedDiffs = db.prepare(`
-        SELECT (julianday(r.resolved_at) - julianday(r.created_at)) * 24.0 as hours
-        FROM reports r
-        JOIN locations l ON r.location_id = l.id
-        WHERE l.block = ? AND r.status = 'resolved' AND r.resolved_at IS NOT NULL
-      `).all(blockName);
-
-      let avgHours = 0;
-      if (resolvedDiffs.length > 0) {
-        const sum = resolvedDiffs.reduce((acc, x) => acc + (Number(x.hours) || 0), 0);
-        avgHours = Number((sum / resolvedDiffs.length).toFixed(1));
+      const windowParam = parsedUrl.searchParams.get("window") || "all";
+      if (!["7d", "30d", "all"].includes(windowParam)) {
+        return sendJson(res, 400, { detail: `Invalid window parameter '${windowParam}'. Allowed: 7d, 30d, all` });
       }
+      let cutoffIso = null;
+      if (windowParam === "7d") cutoffIso = isoHoursAgo(7 * 24);
+      if (windowParam === "30d") cutoffIso = isoHoursAgo(30 * 24);
+
+      const blockName = decodeURIComponent(blockMatch[1]);
+      const blockQuery = `
+        SELECT r.*,
+               u.name as reporter_name, u.role as reporter_role,
+               l.block, l.room, l.location_type, l.latitude, l.longitude,
+               s.name as assignee_name, s.role as assignee_role,
+               ap.category_confidence, ap.duplicate_score, ap.duplicate_of, ap.model_version
+        FROM reports r
+        JOIN locations l ON r.location_id = l.id
+        LEFT JOIN users u ON r.user_id = u.id
+        LEFT JOIN users s ON r.assigned_to = s.id
+        LEFT JOIN ai_predictions ap ON r.id = ap.report_id
+        WHERE l.block = ? ${cutoffIso ? "AND r.created_at >= ?" : ""}
+        ORDER BY r.created_at DESC, r.id DESC
+      `;
+      const blkReports = cutoffIso
+        ? db.prepare(blockQuery).all(blockName, cutoffIso)
+        : db.prepare(blockQuery).all(blockName);
+
+      let pending = 0;
+      let assigned = 0;
+      let inProgress = 0;
+      let resolved = 0;
+      const catCounts = new Map();
+      const resHours = [];
+      for (const r of blkReports) {
+        if (r.status === "pending") pending += 1;
+        else if (r.status === "assigned") assigned += 1;
+        else if (r.status === "in_progress") inProgress += 1;
+        else if (r.status === "resolved") resolved += 1;
+        catCounts.set(r.category, (catCounts.get(r.category) || 0) + 1);
+        if (r.status === "resolved" && r.resolved_at) {
+          const diffMs = Date.parse(r.resolved_at) - Date.parse(r.created_at);
+          if (!Number.isNaN(diffMs)) resHours.push(Math.max(0, diffMs / (3600 * 1000)));
+        }
+      }
+
+      const topCats = Array.from(catCounts.entries())
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, 3)
+        .map(([category, count]) => ({ category, count }));
+
+      const avgHours = resHours.length > 0
+        ? Number((resHours.reduce((a, b) => a + b, 0) / resHours.length).toFixed(1))
+        : 0;
+
+      const incidents = (user.role === "maintenance"
+        ? blkReports.filter(r => r.assigned_to === user.id)
+        : blkReports
+      ).map(row => buildStaffReportPayload(row));
 
       return sendJson(res, 200, {
         block: blockName,
-        total_reports: total,
-        open_reports: open,
+        window: windowParam,
+        total_reports: blkReports.length,
+        pending_reports: pending,
+        assigned_reports: assigned,
+        in_progress_reports: inProgress,
+        open_reports: pending + assigned + inProgress,
         resolved_reports: resolved,
+        has_resolved: resHours.length > 0,
         top_categories: topCats,
         avg_resolution_hours: avgHours,
+        incidents,
         notice: "Patterns are leads to investigate, not proven causes"
       });
     }
@@ -2078,6 +2477,7 @@ async function handleRequest(req, res) {
         return sendJson(res, 400, { detail: "Resolved tickets cannot be reopened" });
       }
 
+      const nowIso = toIsoUtc();
       if (requestedStatus !== currentStatus) {
         if (currentStatus === "pending" && requestedStatus === "assigned") {
           if (user.role !== "admin" && user.role !== "super_admin") {
@@ -2092,18 +2492,18 @@ async function handleRequest(req, res) {
           }
           db.prepare(`
             INSERT INTO resolutions (report_id, staff_id, action, remarks, created_at)
-            VALUES (?, ?, ?, ?, datetime('now'))
-          `).run(reportId, user.id, `Assigned to technician ${staffUser.name} (#${staffUser.id})`, remarks || null);
+            VALUES (?, ?, ?, ?, ?)
+          `).run(reportId, user.id, `Assigned to technician ${staffUser.name} (#${staffUser.id})`, remarks || null, nowIso);
 
           db.prepare(`
             INSERT INTO status_history (report_id, from_status, to_status, changed_by, changed_at)
-            VALUES (?, 'pending', 'assigned', ?, datetime('now'))
-          `).run(reportId, user.id);
+            VALUES (?, 'pending', 'assigned', ?, ?)
+          `).run(reportId, user.id, nowIso);
 
           db.prepare(`
             INSERT INTO notifications (user_id, report_id, message, created_at)
-            VALUES (?, ?, ?, datetime('now'))
-          `).run(existing.user_id, reportId, `Your incident #${reportId} status updated to Assigned`);
+            VALUES (?, ?, ?, ?)
+          `).run(existing.user_id, reportId, `Your incident #${reportId} status updated to Assigned`, nowIso);
         } else if (currentStatus === "assigned" && requestedStatus === "in_progress") {
           const isAssignee = user.role === "maintenance" && user.id === existing.assigned_to;
           const isAdmin = user.role === "admin" || user.role === "super_admin";
@@ -2112,18 +2512,18 @@ async function handleRequest(req, res) {
           }
           db.prepare(`
             INSERT INTO resolutions (report_id, staff_id, action, remarks, created_at)
-            VALUES (?, ?, ?, ?, datetime('now'))
-          `).run(reportId, user.id, "Started work on incident", remarks || null);
+            VALUES (?, ?, ?, ?, ?)
+          `).run(reportId, user.id, "Started work on incident", remarks || null, nowIso);
 
           db.prepare(`
             INSERT INTO status_history (report_id, from_status, to_status, changed_by, changed_at)
-            VALUES (?, 'assigned', 'in_progress', ?, datetime('now'))
-          `).run(reportId, user.id);
+            VALUES (?, 'assigned', 'in_progress', ?, ?)
+          `).run(reportId, user.id, nowIso);
 
           db.prepare(`
             INSERT INTO notifications (user_id, report_id, message, created_at)
-            VALUES (?, ?, ?, datetime('now'))
-          `).run(existing.user_id, reportId, `Your incident #${reportId} status updated to In progress`);
+            VALUES (?, ?, ?, ?)
+          `).run(existing.user_id, reportId, `Your incident #${reportId} status updated to In progress`, nowIso);
         } else {
           return sendJson(res, 400, {
             detail: `Invalid status transition from '${currentStatus}' to '${requestedStatus}'. Allowed flow: Pending -> Assigned -> In Progress -> Resolved.`
@@ -2140,8 +2540,8 @@ async function handleRequest(req, res) {
           }
           db.prepare(`
             INSERT INTO resolutions (report_id, staff_id, action, remarks, created_at)
-            VALUES (?, ?, ?, ?, datetime('now'))
-          `).run(reportId, user.id, `Reassigned ticket to technician ${staffUser.name} (#${staffUser.id})`, remarks || null);
+            VALUES (?, ?, ?, ?, ?)
+          `).run(reportId, user.id, `Reassigned ticket to technician ${staffUser.name} (#${staffUser.id})`, remarks || null, nowIso);
         }
       }
 
@@ -2151,18 +2551,11 @@ async function handleRequest(req, res) {
           assigned_to = ?,
           category = ?,
           priority = ?,
-          updated_at = datetime('now')
+          updated_at = ?
         WHERE id = ?
-      `).run(requestedStatus, requestedAssignee, requestedCategory, requestedPriority, reportId);
+      `).run(requestedStatus, requestedAssignee, requestedCategory, requestedPriority, nowIso, reportId);
 
-      const updated = db.prepare(`
-        SELECT r.*, l.block, l.room, s.name as assignee_name, u.name as reporter_name
-        FROM reports r
-        LEFT JOIN locations l ON r.location_id = l.id
-        LEFT JOIN users s ON r.assigned_to = s.id
-        LEFT JOIN users u ON r.user_id = u.id
-        WHERE r.id = ?
-      `).get(reportId);
+      const updated = fetchSanitizedStaffReportById(reportId);
 
       return sendJson(res, 200, {
         ...updated,
@@ -2203,30 +2596,31 @@ async function handleRequest(req, res) {
         return sendJson(res, 400, { detail: "Remarks must not exceed 1000 characters" });
       }
 
+      const nowIso = toIsoUtc();
       db.prepare(`
         INSERT INTO resolutions (report_id, staff_id, action, remarks, created_at)
-        VALUES (?, ?, ?, ?, datetime('now'))
-      `).run(reportId, user.id, actionText, remarks || null);
+        VALUES (?, ?, ?, ?, ?)
+      `).run(reportId, user.id, actionText, remarks || null, nowIso);
 
       db.prepare(`
         INSERT INTO status_history (report_id, from_status, to_status, changed_by, changed_at)
-        VALUES (?, ?, 'resolved', ?, datetime('now'))
-      `).run(reportId, existing.status, user.id);
+        VALUES (?, ?, 'resolved', ?, ?)
+      `).run(reportId, existing.status, user.id, nowIso);
 
       db.prepare(`
         INSERT INTO notifications (user_id, report_id, message, created_at)
-        VALUES (?, ?, ?, datetime('now'))
-      `).run(existing.user_id, reportId, `Your incident #${reportId} has been resolved: ${actionText}`);
+        VALUES (?, ?, ?, ?)
+      `).run(existing.user_id, reportId, `Your incident #${reportId} has been resolved: ${actionText}`, nowIso);
 
       db.prepare(`
         UPDATE reports SET
           status = 'resolved',
-          resolved_at = datetime('now'),
-          updated_at = datetime('now')
+          resolved_at = ?,
+          updated_at = ?
         WHERE id = ?
-      `).run(reportId);
+      `).run(nowIso, nowIso, reportId);
 
-      const updated = db.prepare("SELECT * FROM reports WHERE id = ?").get(reportId);
+      const updated = fetchSanitizedStaffReportById(reportId);
       return sendJson(res, 200, {
         success: true,
         message: "Ticket marked resolved",
@@ -2440,5 +2834,7 @@ module.exports = {
   DUPLICATE_THRESHOLD,
   validateStartupConfig,
   getCorsHeaders,
-  buildReporterReportPayload
+  buildReporterReportPayload,
+  buildStaffReportPayload,
+  migrateLegacyTimestampsToIsoUtc
 };

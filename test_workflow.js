@@ -5,7 +5,7 @@
  * Tests AC1.1 to AC5.10 (31 Automated Acceptance Criteria).
  */
 
-const { handleRequest, db, seedData, validateReturnUrl, validateStartupConfig } = require("./server.js");
+const { handleRequest, db, seedData, validateReturnUrl, validateStartupConfig, migrateLegacyTimestampsToIsoUtc } = require("./server.js");
 const { Readable } = require("node:stream");
 const { EventEmitter } = require("node:events");
 const fs = require("node:fs");
@@ -975,6 +975,151 @@ async function runTests() {
     allPhotosExact,
     "AC8.5",
     `Photo uploads for PNG-with-alpha, JPEG, and WebP preserve exact original bytes, extensions, and Content-Type (${photoErrors.join("; ") || "ok"})`
+  );
+
+  // -------------------------------------------------------------
+  // GOAL 9: Production Issue Fixes (AC9.1 - AC9.6)
+  // -------------------------------------------------------------
+  console.log("\n--- Goal 9: Production Fixes (AC9.1 - AC9.6) ---");
+
+  // AC9.1: ISO-8601 UTC 'Z' timestamps across API & legacy migration
+  const isoZRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+  const staffListForTime = await request("GET", "/api/staff/reports", null, adminToken);
+  const mineForTime = await request("GET", "/api/reports/mine", null, studentToken);
+  const allTimesValid =
+    staffListForTime.status === 200 &&
+    mineForTime.status === 200 &&
+    staffListForTime.body.reports.every(r => isoZRegex.test(r.created_at) && (!r.resolved_at || isoZRegex.test(r.resolved_at))) &&
+    mineForTime.body.reports.every(r => isoZRegex.test(r.created_at) && (r.timeline || []).every(t => isoZRegex.test(t.changed_at)));
+
+  const insLegacy = db.prepare("INSERT INTO notifications (user_id, report_id, message, created_at) VALUES (1, 1, 'Legacy ts test', '2026-11-12 06:00:00')").run();
+  migrateLegacyTimestampsToIsoUtc();
+  const migratedNotif = db.prepare("SELECT created_at FROM notifications WHERE id = ?").get(Number(insLegacy.lastInsertRowid));
+  db.prepare("DELETE FROM notifications WHERE id = ?").run(Number(insLegacy.lastInsertRowid));
+
+  assert(
+    allTimesValid && migratedNotif?.created_at === "2026-11-12T06:00:00Z",
+    "AC9.1",
+    "All timestamps emit ISO-8601 UTC with 'Z' and legacy SQLite timestamps migrate idempotently"
+  );
+
+  // AC9.2: GET /api/staff/reports/:id/photo authorization + sanitized has_photo
+  const adminPhotoRes = await request("GET", "/api/staff/reports/1/photo", null, adminToken);
+  const assignedTechPhotoRes = await request("GET", "/api/staff/reports/1/photo", null, tech1Token);
+  const unassignedTechPhotoRes = await request("GET", "/api/staff/reports/1/photo", null, tech2Token);
+  const reporterStaffPhotoRes = await request("GET", "/api/staff/reports/1/photo", null, facultyToken);
+  const missingPhotoRes = await request("GET", "/api/staff/reports/2/photo", null, adminToken);
+  const staffPayloadClean = (staffListForTime.body.reports || []).every(
+    r => typeof r.has_photo === "boolean" && !("photo_path" in r) && !("photo_url" in r) && !("reporter_email" in r)
+  );
+
+  assert(
+    adminPhotoRes.status === 200 &&
+    adminPhotoRes.headers["content-type"] === "image/png" &&
+    Buffer.isBuffer(adminPhotoRes.rawBuffer) && adminPhotoRes.rawBuffer.length > 100 &&
+    assignedTechPhotoRes.status === 200 &&
+    unassignedTechPhotoRes.status === 403 &&
+    reporterStaffPhotoRes.status === 403 &&
+    missingPhotoRes.status === 404 &&
+    staffPayloadClean,
+    "AC9.2",
+    "Staff photo endpoint enforces admin/assigned-tech RBAC (200/403/404) and list exposes has_photo without raw paths or email"
+  );
+
+  // AC9.3: Faculty reporter role attribution on staff views + strict reporter isolation
+  const facReportRes = await request("POST", "/api/reports", {
+    description: "AC9.3 Faculty projector HDMI port damaged in Lecture Hall",
+    location_id: 6,
+    category: "Equipment"
+  }, facultyToken);
+  const facReportId = facReportRes.body?.report?.id;
+  const staffAfterFac = await request("GET", "/api/staff/reports", null, adminToken);
+  const staffFacEntry = (staffAfterFac.body.reports || []).find(r => r.id === facReportId);
+  const studentMineAfterFac = await request("GET", "/api/reports/mine", null, studentToken);
+  const studentLegacyAfterFac = await request("GET", "/api/reports", null, studentToken);
+  const studentCannotSeeFac =
+    !(studentMineAfterFac.body.reports || []).some(r => r.id === facReportId) &&
+    !(studentLegacyAfterFac.body.reports || []).some(r => r.id === facReportId);
+
+  assert(
+    facReportRes.status === 201 &&
+    staffFacEntry &&
+    staffFacEntry.reporter_role === "faculty" &&
+    staffFacEntry.reporter_name === "Faculty" &&
+    studentCannotSeeFac,
+    "AC9.3",
+    "Faculty reports preserve reporter_role='faculty' and reporter_name for staff while isolated from other reporters"
+  );
+
+  // AC9.4: Distinct Blocks 1/2/3 end-to-end location binding & invalid location 400
+  const ac94Hdrs = { "x-forwarded-for": "10.0.0.94" };
+  const b1Res = await request("POST", "/api/reports", { description: "AC9.4 Block 1 test electrical fault", location_id: 1, category: "Electrical" }, studentToken, ac94Hdrs);
+  const b2Res = await request("POST", "/api/reports", { description: "AC9.4 Block 2 test staircase plumbing fault", location_id: 4, category: "Water" }, studentToken, ac94Hdrs);
+  const b3Res = await request("POST", "/api/reports", { description: "AC9.4 Block 3 test laboratory projector fault", location_id: 7, category: "Equipment" }, studentToken, ac94Hdrs);
+  const invalidLocZero = await request("POST", "/api/reports", { description: "AC9.4 Invalid location 0 test", location_id: 0, category: "Other" }, studentToken, ac94Hdrs);
+  const invalidLocMissing = await request("POST", "/api/reports", { description: "AC9.4 Missing location test", category: "Other" }, studentToken, ac94Hdrs);
+  const invalidLocUnknown = await request("POST", "/api/reports", { description: "AC9.4 Unknown location 99999 test", location_id: 99999, category: "Other" }, studentToken, ac94Hdrs);
+
+  const staffLocCheck = await request("GET", "/api/staff/reports", null, adminToken);
+  const sB1 = (staffLocCheck.body.reports || []).find(r => r.id === b1Res.body?.report?.id);
+  const sB2 = (staffLocCheck.body.reports || []).find(r => r.id === b2Res.body?.report?.id);
+  const sB3 = (staffLocCheck.body.reports || []).find(r => r.id === b3Res.body?.report?.id);
+
+  assert(
+    b1Res.status === 201 && b2Res.status === 201 && b3Res.status === 201 &&
+    sB1?.block === "Block 1" && sB1?.location?.room === "Room 114" &&
+    sB2?.block === "Block 2" && sB2?.location?.room === "Ground floor" &&
+    sB3?.block === "Block 3" && sB3?.location?.room === "Room 105" &&
+    invalidLocZero.status === 400 && invalidLocMissing.status === 400 && invalidLocUnknown.status === 400,
+    "AC9.4",
+    "Blocks 1/2/3 preserve exact block & room on submit + staff JOIN and reject invalid location_id with 400"
+  );
+
+  // AC9.5: Real /api/staff/blocks/summary matching SQLite & KPI totals + window validation
+  const allBlocksSum = await request("GET", "/api/staff/blocks/summary?window=all", null, adminToken);
+  const triageKpis = await request("GET", "/api/staff/analytics/summary", null, adminToken);
+  const invalidWindowSum = await request("GET", "/api/staff/blocks/summary?window=invalid", null, adminToken);
+  const reporterBlocksForbidden = await request("GET", "/api/staff/blocks/summary", null, studentToken);
+  const distinctDbBlocks = db.prepare("SELECT DISTINCT block FROM locations").all().map(x => x.block);
+  const returnedBlockNames = (allBlocksSum.body.blocks || []).map(b => b.block);
+  const blocksMatchAllDb = distinctDbBlocks.every(name => returnedBlockNames.includes(name));
+  const sumMatchesTotals =
+    allBlocksSum.body.totals?.total_reports === triageKpis.body.total_reports &&
+    allBlocksSum.body.totals?.resolved_reports === triageKpis.body.resolved_reports &&
+    allBlocksSum.body.totals?.open_reports === triageKpis.body.open_reports &&
+    (allBlocksSum.body.blocks || []).reduce((acc, b) => acc + b.total, 0) === triageKpis.body.total_reports;
+
+  assert(
+    allBlocksSum.status === 200 &&
+    blocksMatchAllDb &&
+    sumMatchesTotals &&
+    allBlocksSum.body.notice === "Patterns are leads to investigate, not proven causes." &&
+    invalidWindowSum.status === 400 &&
+    reporterBlocksForbidden.status === 403,
+    "AC9.5",
+    "All-blocks heatmap summary uses live SQLite data, matches triage KPIs, enforces window 400 and reporter 403"
+  );
+
+  // AC9.6: Single-hue CSS scale + removal of hardcoded heatmap & Block 1 UI fallbacks
+  const globalsCss = fs.readFileSync(path.join(__dirname, "frontend/src/app/globals.css"), "utf8");
+  const stylesCss = fs.readFileSync(path.join(__dirname, "public/styles.css"), "utf8");
+  const campusMapTsx = fs.readFileSync(path.join(__dirname, "frontend/src/components/CampusMap.tsx"), "utf8");
+  const staffAdminTsx = fs.readFileSync(path.join(__dirname, "frontend/src/app/staff/admin/page.tsx"), "utf8");
+  const staffWoTsx = fs.readFileSync(path.join(__dirname, "frontend/src/app/staff/work-orders/page.tsx"), "utf8");
+
+  const hasFiveHueSteps = [0, 1, 2, 3, 4].every(
+    step => globalsCss.includes(`--heat-${step}-bg: hsl(227`) && stylesCss.includes(`--heat-${step}-bg: hsl(227`)
+  );
+  const uiClean =
+    !campusMapTsx.includes("BLOCK_STATS") &&
+    !campusMapTsx.includes("Sample data telemetry") &&
+    !staffAdminTsx.includes('|| "Block 1"') &&
+    !staffWoTsx.includes('|| "Block 1"');
+
+  assert(
+    hasFiveHueSteps && uiClean,
+    "AC9.6",
+    "CSS exposes 5-step single-hue light/dark tokens and UI removes hardcoded heatmap stats & Block 1 fallbacks"
   );
 
   // -------------------------------------------------------------

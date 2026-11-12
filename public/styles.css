@@ -41,6 +41,33 @@
   --prio-low-bg: #F3F4F6;
   --prio-low-text: #374151;
   --prio-low-border: #E5E7EB;
+
+  /* Heat Map Single-Hue Discrete Scale (Light Theme - WCAG AA) */
+  --heat-hue: 227;
+  --heat-0-bg: hsl(227, 30%, 97%);
+  --heat-0-fg: hsl(227, 35%, 12%);
+  --heat-0-muted: hsl(227, 25%, 36%);
+  --heat-0-border: hsl(227, 25%, 86%);
+
+  --heat-1-bg: hsl(227, 85%, 92%);
+  --heat-1-fg: hsl(227, 55%, 14%);
+  --heat-1-muted: hsl(227, 35%, 32%);
+  --heat-1-border: hsl(227, 65%, 80%);
+
+  --heat-2-bg: hsl(227, 88%, 83%);
+  --heat-2-fg: hsl(227, 65%, 11%);
+  --heat-2-muted: hsl(227, 45%, 28%);
+  --heat-2-border: hsl(227, 75%, 68%);
+
+  --heat-3-bg: hsl(227, 92%, 51%);
+  --heat-3-fg: #FFFFFF;
+  --heat-3-muted: #E5ECFF;
+  --heat-3-border: hsl(227, 92%, 44%);
+
+  --heat-4-bg: hsl(227, 100%, 38%);
+  --heat-4-fg: #FFFFFF;
+  --heat-4-muted: #E5ECFF;
+  --heat-4-border: hsl(227, 100%, 31%);
 }
 
 [data-theme="dark"] {
@@ -83,6 +110,33 @@
   --prio-low-bg: #18191E;
   --prio-low-text: #D1D5DB;
   --prio-low-border: #2B2F38;
+
+  /* Heat Map Single-Hue Discrete Scale (Dark Theme - WCAG AA) */
+  --heat-hue: 227;
+  --heat-0-bg: hsl(227, 18%, 10%);
+  --heat-0-fg: hsl(227, 20%, 94%);
+  --heat-0-muted: hsl(227, 20%, 72%);
+  --heat-0-border: hsl(227, 20%, 20%);
+
+  --heat-1-bg: hsl(227, 45%, 16%);
+  --heat-1-fg: hsl(227, 20%, 95%);
+  --heat-1-muted: hsl(227, 25%, 76%);
+  --heat-1-border: hsl(227, 45%, 26%);
+
+  --heat-2-bg: hsl(227, 62%, 24%);
+  --heat-2-fg: #FFFFFF;
+  --heat-2-muted: hsl(227, 30%, 82%);
+  --heat-2-border: hsl(227, 62%, 34%);
+
+  --heat-3-bg: hsl(227, 76%, 34%);
+  --heat-3-fg: #FFFFFF;
+  --heat-3-muted: hsl(227, 35%, 86%);
+  --heat-3-border: hsl(227, 76%, 44%);
+
+  --heat-4-bg: hsl(227, 90%, 45%);
+  --heat-4-fg: #FFFFFF;
+  --heat-4-muted: hsl(227, 40%, 90%);
+  --heat-4-border: hsl(227, 90%, 54%);
 }
 
 * {

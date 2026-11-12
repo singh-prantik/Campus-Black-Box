@@ -181,6 +181,8 @@ declare module "lucide-react" {
   export const Image: Icon;
   export const LogOut: Icon;
   export const ClipboardList: Icon;
+  export const Eye: Icon;
+  export const ChevronDown: Icon;
 }
 
 declare module "next" {

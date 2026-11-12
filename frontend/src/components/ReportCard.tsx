@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { Report } from "@/types";
 import { apiFetchProtectedPhoto } from "@/lib/api";
+import { formatFullTimestamp, formatRelativeTime } from "@/lib/time";
 import { StatusBadge, PriorityBadge } from "./StatusBadge";
 import {
   MapPin,
@@ -24,6 +25,8 @@ interface ReportCardProps {
   onClick?: () => void;
   index?: number;
   showPriority?: boolean;
+  showReporterIdentity?: boolean;
+  fetchPhoto?: (report: Report) => Promise<string | null>;
 }
 
 const categoryIcons: Record<string, React.ElementType> = {
@@ -38,38 +41,65 @@ const categoryIcons: Record<string, React.ElementType> = {
   accessibility: Accessibility,
 };
 
-function formatRelativeTime(dateString: string): string {
-  const diffMs = Date.now() - new Date(dateString).getTime();
-  const diffSec = Math.max(1, Math.floor(diffMs / 1000));
-  if (diffSec < 60) return "just now";
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  const diffDays = Math.floor(diffHr / 24);
-  return `${diffDays}d ago`;
+function formatRoleLabel(role: string | null | undefined): string {
+  const lower = String(role || "student").toLowerCase();
+  if (lower === "faculty") return "Faculty";
+  if (lower === "maintenance" || lower === "technician") return "Technician";
+  if (lower === "admin" || lower === "super_admin") return "Admin";
+  return "Student";
 }
 
-export default function ReportCard({ report, onClick, index = 0, showPriority = false }: ReportCardProps) {
+export default function ReportCard({
+  report,
+  onClick,
+  index = 0,
+  showPriority = false,
+  showReporterIdentity = false,
+  fetchPhoto,
+}: ReportCardProps) {
   const [imgError, setImgError] = useState(false);
+  const [imgLoaded, setImgLoaded] = useState(false);
   const [resolvedImgUrl, setResolvedImgUrl] = useState<string | null>(null);
   const rawPhoto = report.photo_path || report.photo_url || "";
+  const shouldFetchPhoto = Boolean(fetchPhoto ? report.has_photo || rawPhoto : rawPhoto);
 
   useEffect(() => {
     let active = true;
     let objectUrl: string | null = null;
     setImgError(false);
+    setImgLoaded(false);
 
-    if (!rawPhoto) {
+    if (!shouldFetchPhoto) {
       setResolvedImgUrl(null);
       return;
     }
 
-    if (rawPhoto.includes("/api/photos/")) {
+    if (fetchPhoto) {
+      fetchPhoto(report)
+        .then((url) => {
+          if (!active) {
+            if (url && url.startsWith("blob:")) URL.revokeObjectURL(url);
+            return;
+          }
+          if (!url) {
+            setImgError(true);
+            return;
+          }
+          objectUrl = url;
+          setResolvedImgUrl(url);
+        })
+        .catch(() => {
+          if (active) setImgError(true);
+        });
+    } else if (rawPhoto.includes("/api/photos/")) {
       apiFetchProtectedPhoto(rawPhoto)
         .then((url) => {
           if (!active) {
             if (url && url.startsWith("blob:")) URL.revokeObjectURL(url);
+            return;
+          }
+          if (!url) {
+            setImgError(true);
             return;
           }
           objectUrl = url;
@@ -88,7 +118,7 @@ export default function ReportCard({ report, onClick, index = 0, showPriority = 
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [rawPhoto]);
+  }, [rawPhoto, shouldFetchPhoto, fetchPhoto, report]);
 
   const catKey = report.category?.toLowerCase() || "";
   const CategoryIcon = categoryIcons[catKey] || HelpCircle;
@@ -99,15 +129,18 @@ export default function ReportCard({ report, onClick, index = 0, showPriority = 
   const locationString =
     blockName && roomName
       ? `${blockName} · ${roomName}`
-      : blockName || roomName || "Campus location";
+      : blockName || roomName || "Location unavailable";
 
-  // Reporter Role
-  const reporterRole = report.reporter_role || report.reporter?.role || "Student";
-  const formattedRole =
-    reporterRole.charAt(0).toUpperCase() + reporterRole.slice(1).toLowerCase();
+  const roleLabel = formatRoleLabel(report.reporter_role || report.reporter?.role);
+  const reporterDisplay = showReporterIdentity
+    ? report.reporter_name
+      ? `${report.reporter_name} (${roleLabel})`
+      : roleLabel
+    : "You";
 
   const title = report.title || report.description?.slice(0, 48) || "Incident";
   const timeSince = formatRelativeTime(report.created_at);
+  const fullTimestamp = formatFullTimestamp(report.created_at);
 
   return (
     <article
@@ -127,16 +160,7 @@ export default function ReportCard({ report, onClick, index = 0, showPriority = 
     >
       {/* 16:10 Thumbnail */}
       <div className="relative w-full aspect-[16/10] bg-bg border-b border-border overflow-hidden flex items-center justify-center">
-        {resolvedImgUrl && !imgError ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={resolvedImgUrl}
-            alt={report.alt_text || report.title || "Incident thumbnail"}
-            onError={() => setImgError(true)}
-            className="w-full h-full object-contain bg-white transition-transform duration-200 group-hover:scale-[1.02]"
-            loading="lazy"
-          />
-        ) : (
+        {(!resolvedImgUrl || imgError || !imgLoaded) && (
           <div className="flex flex-col items-center justify-center gap-2 text-muted">
             <CategoryIcon className="w-8 h-8 stroke-[1.5]" />
             <span className="text-xs uppercase font-medium tracking-wide">
@@ -144,6 +168,25 @@ export default function ReportCard({ report, onClick, index = 0, showPriority = 
             </span>
           </div>
         )}
+        {resolvedImgUrl && !imgError ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={resolvedImgUrl}
+            alt={report.alt_text || report.title || "Incident thumbnail"}
+            onLoad={(e) => {
+              if (e.currentTarget.naturalWidth <= 1 && e.currentTarget.naturalHeight <= 1) {
+                setImgError(true);
+              } else {
+                setImgLoaded(true);
+              }
+            }}
+            onError={() => setImgError(true)}
+            className={`w-full h-full object-contain bg-surface transition-transform duration-200 group-hover:scale-[1.02] ${
+              imgLoaded ? "opacity-100" : "opacity-0 absolute inset-0"
+            }`}
+            loading="lazy"
+          />
+        ) : null}
 
         {/* Similar Count Tag (if any) */}
         {report.similar_count && report.similar_count > 0 ? (
@@ -180,14 +223,14 @@ export default function ReportCard({ report, onClick, index = 0, showPriority = 
         </div>
 
         {/* Footer Meta */}
-        <div className="pt-3 border-t border-border flex items-center justify-between text-xs text-muted">
-          <div className="flex items-center gap-1">
+        <div className="pt-3 border-t border-border flex items-center justify-between text-xs text-muted gap-2">
+          <div className="flex items-center gap-1 shrink-0" title={fullTimestamp}>
             <Clock className="w-3.5 h-3.5 stroke-[1.5]" />
             <span>{timeSince}</span>
           </div>
-          <div>
-            <span>Reported by: </span>
-            <span className="font-medium text-text">{formattedRole}</span>
+          <div className="truncate">
+            <span>Reported by </span>
+            <span className="font-medium text-text">{reporterDisplay}</span>
           </div>
         </div>
       </div>

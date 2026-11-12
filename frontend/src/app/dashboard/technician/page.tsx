@@ -6,7 +6,7 @@ import StaffNavbar from "@/components/StaffNavbar";
 import ReportCard from "@/components/ReportCard";
 import StaffReportModal from "@/components/StaffReportModal";
 import { Report } from "@/types";
-import { apiGetReports, useStaffSession } from "@/lib/staffApi";
+import { apiGetReports, apiFetchStaffReportPhoto, useStaffSession } from "@/lib/staffApi";
 import { Wrench, ShieldAlert, ArrowRight } from "lucide-react";
 
 export default function TechnicianDashboard() {
@@ -100,9 +100,6 @@ export default function TechnicianDashboard() {
               <span className="text-[11px] font-semibold text-accent uppercase tracking-wider">
                 Technician Field Portal
               </span>
-              <span className="text-[11px] px-1.5 py-0.5 rounded-chip bg-border text-muted font-medium">
-                Sample data
-              </span>
             </div>
             <h1 className="text-xl font-bold text-text mt-0.5">Assigned Work Orders</h1>
             <p className="text-xs text-muted mt-0.5">
@@ -136,6 +133,12 @@ export default function TechnicianDashboard() {
                 report={report}
                 index={idx}
                 showPriority={true}
+                showReporterIdentity={true}
+                fetchPhoto={(r) =>
+                  r.has_photo
+                    ? apiFetchStaffReportPhoto(r.id).catch(() => null)
+                    : Promise.resolve(null)
+                }
                 onClick={() => setSelectedReport(report)}
               />
             ))}

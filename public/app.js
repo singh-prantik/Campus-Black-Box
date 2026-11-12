@@ -430,7 +430,8 @@ function handleDescriptionChange() {
   let locationId = qrLocation ? qrLocation.id : null;
   if (!locationId) {
     const locSelect = document.getElementById("report-location-select");
-    locationId = Number(locSelect ? locSelect.value : 0) || 1;
+    const parsedLoc = Number(locSelect ? locSelect.value : 0);
+    locationId = parsedLoc > 0 ? parsedLoc : null;
   }
 
   aiDebounceTimer = setTimeout(async () => {
@@ -680,20 +681,25 @@ async function fetchMyReports() {
 
     container.innerHTML = reports.map(r => {
       const statusClass = `status-${r.status}`;
-      const dateFormatted = new Date(r.created_at).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
+      const fullTs = window.CBBTime ? window.CBBTime.formatFullTimestamp(r.created_at) : r.created_at;
+      const relTs = window.CBBTime ? window.CBBTime.formatRelativeTime(r.created_at) : "";
+      const blockText = r.block || (r.location && r.location.block) || "";
+      const roomText = r.room || (r.location && r.location.room) || "";
+      const locText = blockText && roomText ? `${blockText} · ${roomText}` : (blockText || roomText || "Location unavailable");
 
       return `
         <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px; cursor: pointer; transition: border-color 150ms ease;" onclick="openReportDetailModal(${r.id})">
           <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
             <div style="display: flex; align-items: center; gap: 8px;">
               <span style="font-weight: 700; font-size: 15px;">#${r.id}</span>
-              <span class="chip" style="font-size: 11px; font-weight: 600;">${r.block} · ${r.room}</span>
+              <span class="chip" style="font-size: 11px; font-weight: 600;">${locText}</span>
               <span class="chip" style="font-size: 11px;">${r.category}</span>
               <span class="chip ${statusClass}" style="font-size: 11px; text-transform: capitalize;">${r.status.replace("_", " ")}</span>
             </div>
-            <div style="font-size: 12px; color: var(--muted);">${dateFormatted}</div>
+            <div style="font-size: 12px; color: var(--muted);" title="${fullTs}">${relTs ? `${relTs} · ` : ""}${fullTs}</div>
           </div>
           <p style="font-size: 13px; line-height: 1.5; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${r.description}</p>
+          <div style="font-size: 11px; color: var(--muted); margin-top: 8px;">Reported by <strong>You</strong></div>
         </div>
       `;
     }).join("");
@@ -722,12 +728,39 @@ async function openReportDetailModal(reportId) {
     statusPill.className = `chip status-${r.status}`;
     statusPill.textContent = r.status.replace("_", " ");
 
-    // Photo preview
+    // Photo preview (authenticated blob fetch)
     const photoWrap = document.getElementById("detail-photo-wrap");
     const photoImg = document.getElementById("detail-photo-img");
-    if (r.photo_path || r.photo_url) {
-      photoImg.src = r.photo_path || r.photo_url;
-      photoWrap.style.display = "block";
+    if (window._activeDetailBlobUrl) {
+      URL.revokeObjectURL(window._activeDetailBlobUrl);
+      window._activeDetailBlobUrl = null;
+    }
+    const rawPhoto = r.photo_path || r.photo_url || "";
+    if (rawPhoto) {
+      if (rawPhoto.includes("/api/photos/")) {
+        photoWrap.style.display = "none";
+        apiReporterFetch(rawPhoto)
+          .then(pRes => (pRes && pRes.ok ? pRes.blob() : null))
+          .then(blob => {
+            if (!blob || blob.size === 0) return;
+            const objUrl = URL.createObjectURL(blob);
+            window._activeDetailBlobUrl = objUrl;
+            photoImg.onload = () => {
+              if (photoImg.naturalWidth <= 1 && photoImg.naturalHeight <= 1) {
+                photoWrap.style.display = "none";
+              } else {
+                photoWrap.style.display = "block";
+              }
+            };
+            photoImg.onerror = () => { photoWrap.style.display = "none"; };
+            photoImg.src = objUrl;
+          })
+          .catch(() => { photoWrap.style.display = "none"; });
+      } else {
+        photoImg.onerror = () => { photoWrap.style.display = "none"; };
+        photoImg.src = rawPhoto;
+        photoWrap.style.display = "block";
+      }
     } else {
       photoWrap.style.display = "none";
     }
@@ -736,12 +769,15 @@ async function openReportDetailModal(reportId) {
     const updatesBox = document.getElementById("detail-updates-box");
     const updatesList = document.getElementById("detail-updates-list");
     if (r.updates && r.updates.length) {
-      updatesList.innerHTML = r.updates.map(u => `
+      updatesList.innerHTML = r.updates.map(u => {
+        const uFull = window.CBBTime ? window.CBBTime.formatFullTimestamp(u.created_at) : u.created_at;
+        return `
         <div style="font-size: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;">
           <div>${u.text}</div>
-          <div style="font-size: 10px; color: var(--muted); margin-top: 4px;">${new Date(u.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</div>
+          <div style="font-size: 10px; color: var(--muted); margin-top: 4px;" title="${uFull}">${uFull}</div>
         </div>
-      `).join("");
+      `;
+      }).join("");
       updatesBox.style.display = "block";
     } else {
       updatesBox.style.display = "none";
@@ -780,7 +816,7 @@ async function fetchReportTimeline(reportId) {
     }
 
     timelineContainer.innerHTML = history.map((item, idx) => {
-      const timeStr = new Date(item.changed_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" });
+      const timeStr = window.CBBTime ? window.CBBTime.formatFullTimestamp(item.changed_at) : item.changed_at;
       const label = item.from_status 
         ? `${item.from_status.replace("_", " ")} → ${item.to_status.replace("_", " ")}` 
         : `Submitted as ${item.to_status.replace("_", " ")}`;
@@ -791,7 +827,7 @@ async function fetchReportTimeline(reportId) {
             <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--accent);"></span>
             <span style="font-weight: 600; text-transform: capitalize;">${label}</span>
           </div>
-          <span style="color: var(--muted); font-size: 11px;">${timeStr}</span>
+          <span style="color: var(--muted); font-size: 11px;" title="${timeStr}">${timeStr}</span>
         </div>
       `;
     }).join("");
@@ -802,6 +838,10 @@ async function fetchReportTimeline(reportId) {
 
 function closeReportDetailModal() {
   document.getElementById("modal-report-detail").style.display = "none";
+  if (window._activeDetailBlobUrl) {
+    URL.revokeObjectURL(window._activeDetailBlobUrl);
+    window._activeDetailBlobUrl = null;
+  }
 }
 
 // -------------------------------------------------------------
@@ -831,12 +871,16 @@ async function fetchNotifications() {
       if (!notifs.length) {
         list.innerHTML = `<div style="font-size: 12px; color: var(--muted); text-align: center; padding: 16px;">No notifications yet</div>`;
       } else {
-        list.innerHTML = notifs.map(n => `
+        list.innerHTML = notifs.map(n => {
+          const nFull = window.CBBTime ? window.CBBTime.formatFullTimestamp(n.created_at) : n.created_at;
+          const nRel = window.CBBTime ? window.CBBTime.formatRelativeTime(n.created_at) : "";
+          return `
           <div style="font-size: 12px; padding: 8px; border-radius: 6px; background: ${n.read_at ? 'transparent' : 'var(--surface)'}; border-bottom: 1px solid var(--border);">
             <div style="font-weight: ${n.read_at ? '400' : '600'};">${n.message}</div>
-            <div style="font-size: 10px; color: var(--muted); margin-top: 2px;">${new Date(n.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</div>
+            <div style="font-size: 10px; color: var(--muted); margin-top: 2px;" title="${nFull}">${nRel ? `${nRel} · ` : ""}${nFull}</div>
           </div>
-        `).join("");
+        `;
+        }).join("");
       }
     }
   } catch (err) {

@@ -317,9 +317,6 @@ export default function QrReportPage() {
                   <QrCode className="w-3.5 h-3.5 stroke-[1.5]" />
                   QR Deep-Link Report
                 </span>
-                <span className="text-[11px] px-1.5 py-0.5 rounded-chip bg-border text-muted font-medium">
-                  Sample data
-                </span>
               </div>
               <h1 className="text-xl font-bold text-text mt-1">Report Campus Incident</h1>
               <p className="text-xs text-muted mt-0.5">

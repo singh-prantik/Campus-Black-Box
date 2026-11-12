@@ -12,6 +12,7 @@ import {
   CategoryData,
   TrendData,
   User,
+  BlocksSummaryResponse,
 } from "@/types";
 import { API_BASE, decodeJwtPayload } from "./api";
 
@@ -167,6 +168,14 @@ export async function apiGetHeatmap(): Promise<{ locations: HeatmapLocation[] }>
   return await apiStaffFetch<{ locations: HeatmapLocation[] }>("/api/staff/analytics/heatmap");
 }
 
+export async function apiGetBlocksSummary(
+  window: "7d" | "30d" | "all" = "all"
+): Promise<BlocksSummaryResponse> {
+  return await apiStaffFetch<BlocksSummaryResponse>(
+    `/api/staff/blocks/summary?window=${encodeURIComponent(window)}`
+  );
+}
+
 export async function apiGetCategories(): Promise<{ data: CategoryData[] }> {
   return await apiStaffFetch<{ data: CategoryData[] }>("/api/staff/analytics/categories");
 }
@@ -175,11 +184,30 @@ export async function apiGetTrends(): Promise<{ data: TrendData[] }> {
   return await apiStaffFetch<{ data: TrendData[] }>("/api/staff/analytics/trends");
 }
 
+export async function apiFetchStaffReportPhoto(reportId: number): Promise<string> {
+  const token = getStaffToken();
+  if (!token) {
+    throw new Error("Photo unavailable");
+  }
+  const url = `${API_BASE}/api/staff/reports/${reportId}/photo`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error("Photo unavailable");
+  }
+  const blob = await res.blob();
+  if (!blob || blob.size === 0) {
+    throw new Error("Photo unavailable");
+  }
+  return URL.createObjectURL(blob);
+}
+
 export async function apiFetchStaffProtectedPhoto(photoPath: string): Promise<string | null> {
   if (!photoPath) return null;
   if (photoPath.startsWith("data:")) return photoPath;
   const url = photoPath.startsWith("http") ? photoPath : `${API_BASE}${photoPath}`;
-  if (!photoPath.includes("/api/photos/")) return url;
+  if (!photoPath.includes("/api/photos/") && !photoPath.includes("/api/staff/reports/")) return url;
 
   const token = getStaffToken();
   if (!token) return null;
@@ -188,6 +216,7 @@ export async function apiFetchStaffProtectedPhoto(photoPath: string): Promise<st
   });
   if (!res.ok) return null;
   const blob = await res.blob();
+  if (!blob || blob.size === 0) return null;
   return URL.createObjectURL(blob);
 }
 

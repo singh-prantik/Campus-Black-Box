@@ -183,19 +183,21 @@
           <thead>
             <tr style="border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; text-transform: uppercase;">
               <th style="padding: 12px 16px;">ID</th>
+              <th style="padding: 12px 16px;">Reported</th>
               <th style="padding: 12px 16px;">Location</th>
               <th style="padding: 12px 16px;">Description</th>
               <th style="padding: 12px 16px;">Category</th>
               <th style="padding: 12px 16px;">Priority</th>
               <th style="padding: 12px 16px;">Status</th>
               <th style="padding: 12px 16px;">Assignee</th>
-              <th style="padding: 12px 16px;">Created</th>
+              <th style="padding: 12px 16px;">Reporter</th>
+              <th style="padding: 12px 16px; text-align: center;">Photo</th>
               <th style="padding: 12px 16px; text-align: right;">Actions</th>
             </tr>
           </thead>
           <tbody id="staff-admin-table-body">
             <tr>
-              <td colspan="9" style="text-align: center; padding: 32px; color: var(--muted);">Loading incidents...</td>
+              <td colspan="11" style="text-align: center; padding: 32px; color: var(--muted);">Loading incidents...</td>
             </tr>
           </tbody>
         </table>
@@ -207,13 +209,32 @@
       <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 24px;">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; flex-wrap: wrap; gap: 10px;">
           <div>
-            <h2 style="font-size: 18px; font-weight: 700; margin-bottom: 4px;">Campus Geo-Spatial Heat Map (Block 1 – 4)</h2>
-            <p style="font-size: 13px; color: var(--muted);">Click any block card to drill down into historical analytics and category breakdowns.</p>
+            <h2 style="font-size: 18px; font-weight: 700; margin-bottom: 4px;">Campus Heat Map</h2>
+            <p style="font-size: 13px; color: var(--muted);">Live incident density from database across every campus block.</p>
           </div>
-          <button class="btn btn-secondary btn-sm" onclick="fetchHeatmapData()">Refresh Heat Map</button>
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <select id="heatmap-window-select" class="form-select" style="width: auto;" onchange="fetchHeatmapData(this.value)">
+              <option value="all">All time</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+            </select>
+            <button class="btn btn-secondary btn-sm" onclick="fetchHeatmapData()">Refresh Heat Map</button>
+          </div>
+        </div>
+
+        <div id="heatmap-legend" style="display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); margin-bottom: 16px; flex-wrap: wrap;">
+          <span>Fewer open incidents</span>
+          <span style="display: inline-flex; gap: 4px;">
+            <span style="width: 22px; height: 18px; border-radius: 4px; background: var(--heat-0-bg); border: 1px solid var(--heat-0-border); color: var(--heat-0-fg); display: inline-flex; align-items: center; justify-content: center; font-weight: 600;">0</span>
+            <span style="width: 22px; height: 18px; border-radius: 4px; background: var(--heat-1-bg); border: 1px solid var(--heat-1-border); color: var(--heat-1-fg); display: inline-flex; align-items: center; justify-content: center; font-weight: 600;">1</span>
+            <span style="width: 22px; height: 18px; border-radius: 4px; background: var(--heat-2-bg); border: 1px solid var(--heat-2-border); color: var(--heat-2-fg); display: inline-flex; align-items: center; justify-content: center; font-weight: 600;">2</span>
+            <span style="width: 22px; height: 18px; border-radius: 4px; background: var(--heat-3-bg); border: 1px solid var(--heat-3-border); color: var(--heat-3-fg); display: inline-flex; align-items: center; justify-content: center; font-weight: 600;">3</span>
+            <span style="width: 22px; height: 18px; border-radius: 4px; background: var(--heat-4-bg); border: 1px solid var(--heat-4-border); color: var(--heat-4-fg); display: inline-flex; align-items: center; justify-content: center; font-weight: 600;">4</span>
+          </span>
+          <span>More</span>
         </div>
         
-        <div id="heatmap-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px;">
+        <div id="heatmap-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;">
           <!-- Loaded dynamically -->
         </div>
       </div>
@@ -349,6 +370,19 @@
     </div>
   </div>
 
+  <!-- MODAL: PHOTO PROOF LIGHTBOX -->
+  <div id="modal-photo-lightbox" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="Incident photo proof" style="display: none;" onclick="handleStaffModalBackdropClick(event, 'modal-photo-lightbox')">
+    <div class="modal-card" style="max-width: 720px; width: 94%;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <h3 style="font-size: 16px; font-weight: 700;" id="lightbox-photo-title">Photo Proof</h3>
+        <button id="lightbox-close-btn" class="btn btn-secondary btn-sm" aria-label="Close photo lightbox" onclick="closeStaffPhotoLightbox()">Close</button>
+      </div>
+      <div id="lightbox-photo-body" style="min-height: 240px; max-height: 70vh; display: flex; align-items: center; justify-content: center; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px;">
+        <span style="font-size: 12px; color: var(--muted);">Loading photo proof...</span>
+      </div>
+    </div>
+  </div>
+
   <!-- STAFF FOOTER -->
   <footer style="border-top: 1px solid var(--border); padding: 20px 0; margin-top: 40px; text-align: center; font-size: 12px; color: var(--muted);">
     <div class="container" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
@@ -360,6 +394,7 @@
     </div>
   </footer>
 
+  <script src="/time.js"></script>
   <script src="/staff.js"></script>
 </body>
 </html>

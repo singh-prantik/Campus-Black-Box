@@ -6,12 +6,14 @@ import {
   apiUpdateReport,
   apiResolveReport,
   apiGetStaff,
-  apiFetchStaffProtectedPhoto,
+  apiFetchStaffReportPhoto,
   useStaffSession,
 } from "@/lib/staffApi";
+import { formatFullTimestamp, formatRelativeTime } from "@/lib/time";
+import PhotoLightboxModal from "./PhotoLightboxModal";
 import { StatusBadge, PriorityBadge } from "./StatusBadge";
 import toast from "react-hot-toast";
-import { X, MapPin, User, Sparkles, CheckCircle2, Clock } from "lucide-react";
+import { X, MapPin, User, Sparkles, CheckCircle2, Clock, Camera } from "lucide-react";
 
 const statusSteps = ["pending", "assigned", "in_progress", "resolved"];
 const statusStepLabels: Record<string, string> = {
@@ -53,6 +55,8 @@ export default function StaffReportModal({
   const [showResolve, setShowResolve] = useState(false);
   const [saving, setSaving] = useState(false);
   const [photoSrc, setPhotoSrc] = useState<string | null>(null);
+  const [photoUnavailable, setPhotoUnavailable] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
 
   useEffect(() => {
     if (isAdmin) {
@@ -62,33 +66,32 @@ export default function StaffReportModal({
     }
   }, [isAdmin]);
 
-  const rawPhoto = report.photo_path || report.photo_url || "";
+  const hasPhoto = Boolean(report.has_photo || report.photo_path || report.photo_url);
   useEffect(() => {
     let active = true;
     let blobUrl: string | null = null;
-    if (!rawPhoto) {
+    setPhotoUnavailable(false);
+    if (!hasPhoto) {
       setPhotoSrc(null);
       return;
     }
-    if (rawPhoto.includes("/api/photos/")) {
-      apiFetchStaffProtectedPhoto(rawPhoto)
-        .then((url) => {
-          if (!active) {
-            if (url && url.startsWith("blob:")) URL.revokeObjectURL(url);
-            return;
-          }
-          blobUrl = url;
-          setPhotoSrc(url);
-        })
-        .catch(() => {});
-    } else {
-      setPhotoSrc(rawPhoto);
-    }
+    apiFetchStaffReportPhoto(report.id)
+      .then((url) => {
+        if (!active) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        blobUrl = url;
+        setPhotoSrc(url);
+      })
+      .catch(() => {
+        if (active) setPhotoUnavailable(true);
+      });
     return () => {
       active = false;
       if (blobUrl && blobUrl.startsWith("blob:")) URL.revokeObjectURL(blobUrl);
     };
-  }, [rawPhoto]);
+  }, [hasPhoto, report.id]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -153,8 +156,14 @@ export default function StaffReportModal({
   const blockName = report.location?.block || report.block;
   const roomName = report.location?.room || report.room;
   const locationString =
-    blockName && roomName ? `${blockName} · ${roomName}` : blockName || roomName || "Campus location";
-  const reporterRole = report.reporter_role || report.reporter?.role || "Student";
+    blockName && roomName ? `${blockName} · ${roomName}` : blockName || roomName || "Location unavailable";
+  const rawRole = String(report.reporter_role || report.reporter?.role || "student").toLowerCase();
+  const roleLabel = rawRole === "faculty" ? "Faculty" : rawRole === "maintenance" ? "Technician" : "Student";
+  const reporterDisplay = report.reporter_name
+    ? `${report.reporter_name} (${roleLabel})`
+    : roleLabel;
+  const fullTimestamp = formatFullTimestamp(report.created_at);
+  const relativeTimestamp = formatRelativeTime(report.created_at);
 
   return (
     <div
@@ -226,25 +235,52 @@ export default function StaffReportModal({
           <div className="p-3 rounded-input bg-bg border border-border flex items-center gap-2">
             <User className="w-4 h-4 text-muted shrink-0" />
             <div>
-              <div className="text-[11px] text-muted">Reporter Role</div>
-              <div className="font-semibold text-text capitalize">{reporterRole}</div>
+              <div className="text-[11px] text-muted">Reported By</div>
+              <div className="font-semibold text-text">{reporterDisplay}</div>
             </div>
           </div>
           <div className="p-3 rounded-input bg-bg border border-border flex items-center gap-2">
             <Clock className="w-4 h-4 text-muted shrink-0" />
             <div>
-              <div className="text-[11px] text-muted">Logged</div>
-              <div className="font-semibold text-text">
-                {new Date(report.created_at).toLocaleDateString()}
+              <div className="text-[11px] text-muted">Reported Time</div>
+              <div className="font-semibold text-text" title={fullTimestamp}>
+                {fullTimestamp}
+                <span className="text-muted font-normal ml-1">({relativeTimestamp})</span>
               </div>
             </div>
           </div>
         </div>
 
-        {photoSrc && (
-          <div className="rounded-input overflow-hidden border border-border bg-white p-2">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={photoSrc} alt="Evidence photo" className="max-h-60 w-full object-contain rounded" />
+        {hasPhoto && (
+          <div className="rounded-input border border-border bg-bg p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-muted uppercase tracking-wider">
+                Photo Evidence
+              </span>
+              <button
+                type="button"
+                aria-label="View photo proof"
+                onClick={() => setLightboxOpen(true)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-input border border-border bg-surface text-xs font-medium text-text hover:border-accent hover:text-accent transition-colors"
+              >
+                <Camera className="w-3.5 h-3.5 stroke-[1.5]" />
+                <span>View photo proof</span>
+              </button>
+            </div>
+            {photoSrc && !photoUnavailable ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={photoSrc}
+                alt={`Evidence photo for incident #${report.id}`}
+                onClick={() => setLightboxOpen(true)}
+                onError={() => setPhotoUnavailable(true)}
+                className="max-h-56 w-full object-contain rounded cursor-pointer bg-surface"
+              />
+            ) : photoUnavailable ? (
+              <div className="py-4 text-center text-xs text-muted">Photo unavailable</div>
+            ) : (
+              <div className="py-4 text-center text-xs text-muted">Loading photo preview...</div>
+            )}
           </div>
         )}
 
@@ -381,6 +417,13 @@ export default function StaffReportModal({
           </div>
         )}
       </div>
+      {lightboxOpen && (
+        <PhotoLightboxModal
+          reportId={report.id}
+          title={report.title || report.description?.slice(0, 48)}
+          onClose={() => setLightboxOpen(false)}
+        />
+      )}
     </div>
   );
 }

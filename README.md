@@ -163,6 +163,13 @@ To deploy the Next.js client (`frontend/`):
    - `NEXT_PUBLIC_API_URL`: Your Render backend URL (e.g. `https://campus-black-box.onrender.com`).
 4. Click **Deploy**.
 
+### Ephemeral Disk & Location Audit Notes
+- **Render Free-Tier Uploads (`uploads/`):** On Render's free web-service tier without a persistent disk mount, uploaded photo files on local disk (`uploads/`) are ephemeral and may disappear after container sleep/restart. The staff lightbox and reporter card views handle missing files gracefully (`"Photo unavailable"` or category-icon fallback) instead of rendering broken or blank boxes.
+- **Location Integrity Audit (`scripts/check_locations.js`):** To inspect existing SQLite report rows for missing/invalid `location_id` or suspicious location bindings without rewriting legacy data:
+  ```bash
+  node scripts/check_locations.js
+  ```
+
 ---
 
 ## 🧪 Verification & Acceptance Testing

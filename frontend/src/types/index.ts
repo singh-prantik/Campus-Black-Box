@@ -51,13 +51,18 @@ export interface Report {
   status: "submitted" | "pending" | "assigned" | "in_progress" | "resolved";
   photo_url: string | null;
   photo_path?: string | null;
+  has_photo?: boolean;
   alt_text?: string;
   block?: string | null;
   room?: string | null;
   location_type?: string | null;
   assigned_to?: number | null;
+  assignee_name?: string | null;
   similar_count?: number;
-  reporter_role?: "Student" | "Faculty" | "Technician" | string;
+  similar_updates_count?: number;
+  reporter_name?: string | null;
+  reporter_role?: "Student" | "Faculty" | "Technician" | string | null;
+  category_confidence?: number | null;
   created_at: string;
   updated_at?: string | null;
   resolved_at?: string | null;
@@ -150,4 +155,43 @@ export interface ResolutionTimeData {
   block: string;
   avg_hours: number;
   count: number;
+}
+
+export interface BlockTopCategory {
+  category: string;
+  count: number;
+}
+
+export interface BlockSummaryItem {
+  block: string;
+  location_count: number;
+  total: number;
+  pending: number;
+  assigned: number;
+  in_progress: number;
+  resolved: number;
+  open: number;
+  has_resolved: boolean;
+  avg_resolution_hours: number;
+  top_categories: BlockTopCategory[];
+  incidents: Report[];
+}
+
+export interface BlocksSummaryTotals {
+  total_reports: number;
+  pending_reports: number;
+  assigned_reports: number;
+  in_progress_reports: number;
+  resolved_reports: number;
+  open_reports: number;
+  has_resolved_tickets: boolean;
+  avg_resolution_hours: number;
+  busiest_open_count: number;
+}
+
+export interface BlocksSummaryResponse {
+  window: "7d" | "30d" | "all";
+  totals: BlocksSummaryTotals;
+  blocks: BlockSummaryItem[];
+  notice: string;
 }

@@ -210,6 +210,7 @@ export async function apiFetchProtectedPhoto(photoPath: string): Promise<string 
   });
   if (!res.ok) return null;
   const blob = await res.blob();
+  if (!blob || blob.size === 0) return null;
   return URL.createObjectURL(blob);
 }
 
@@ -245,7 +246,7 @@ export async function apiMarkNotificationsRead(): Promise<{ success: boolean }> 
 // ==========================================
 export async function apiPredict(
   description: string,
-  locationId: number = 1
+  locationId?: number | null
 ): Promise<{
   predicted_category: string | null;
   category_confidence: number | null;
@@ -255,7 +256,7 @@ export async function apiPredict(
 }> {
   return await apiFetch("/api/ai/predict", {
     method: "POST",
-    body: JSON.stringify({ description, location_id: locationId }),
+    body: JSON.stringify({ description, location_id: locationId ?? null }),
   });
 }
 
