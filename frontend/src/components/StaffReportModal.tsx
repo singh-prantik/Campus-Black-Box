@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Report, StaffMember } from "@/types";
 import {
   apiUpdateReport,
   apiResolveReport,
   apiGetStaff,
+  apiGetStaffReportDetail,
   apiFetchStaffReportPhoto,
   useStaffSession,
 } from "@/lib/staffApi";
@@ -25,19 +26,28 @@ const statusStepLabels: Record<string, string> = {
 
 interface StaffReportModalProps {
   report: Report;
+  focusResolution?: boolean;
   onClose: () => void;
   onUpdate?: (report: Report) => void;
 }
 
 export default function StaffReportModal({
   report,
+  focusResolution = false,
   onClose,
   onUpdate,
 }: StaffReportModalProps) {
   const { user } = useStaffSession();
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
+  const [detailReport, setDetailReport] = useState<Report>(report);
+  const [detailResolution, setDetailResolution] = useState<Report["resolution"]>(
+    report.resolution || null
+  );
+  const [detailLoading, setDetailLoading] = useState<boolean>(true);
+  const resolutionSectionRef = useRef<HTMLDivElement | null>(null);
+
   const isAssignedTechnician =
-    user?.role === "maintenance" && user?.id === report.assigned_to;
+    user?.role === "maintenance" && user?.id === detailReport.assigned_to;
   const canManage = isAdmin || isAssignedTechnician;
 
   const [staff, setStaff] = useState<StaffMember[]>([]);
@@ -59,12 +69,66 @@ export default function StaffReportModal({
   const [lightboxOpen, setLightboxOpen] = useState(false);
 
   useEffect(() => {
+    let active = true;
+    setDetailReport(report);
+    setDetailResolution(report.resolution || null);
+    setDetailLoading(true);
+    apiGetStaffReportDetail(report.id)
+      .then((res) => {
+        if (!active) return;
+        const fullRep = res.report || report;
+        setDetailReport(fullRep);
+        const latestRes =
+          res.resolution ||
+          fullRep.resolution ||
+          (res.resolutions && res.resolutions.length > 0
+            ? {
+                action: res.resolutions[res.resolutions.length - 1].action,
+                remarks: res.resolutions[res.resolutions.length - 1].remarks ?? null,
+                resolved_by:
+                  res.resolutions[res.resolutions.length - 1].staff_name ||
+                  fullRep.resolved_by ||
+                  null,
+                resolved_at:
+                  fullRep.resolved_at ||
+                  res.resolutions[res.resolutions.length - 1].created_at,
+              }
+            : null);
+        setDetailResolution(latestRes);
+        if (fullRep.assigned_to) setAssignTo(String(fullRep.assigned_to));
+        setNewStatus(fullRep.status === "submitted" ? "pending" : fullRep.status);
+        setNewPriority(fullRep.priority || "medium");
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (active) setDetailLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [report]);
+
+  useEffect(() => {
+    if (!detailLoading && focusResolution && resolutionSectionRef.current) {
+      resolutionSectionRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [detailLoading, focusResolution]);
+
+  useEffect(() => {
     if (isAdmin) {
       apiGetStaff()
-        .then((res) => setStaff(res.staff))
+        .then((res) => {
+          const list = [...(res.staff || [])].sort((a, b) => {
+            const aInact = a.availability === "inactive" ? 1 : 0;
+            const bInact = b.availability === "inactive" ? 1 : 0;
+            if (aInact !== bInact) return aInact - bInact;
+            return a.id - b.id;
+          });
+          setStaff(list);
+        })
         .catch(() => {});
     }
-  }, [isAdmin]);
+  }, [isAdmin, report.id]);
 
   const hasPhoto = Boolean(report.has_photo || report.photo_path || report.photo_url);
   useEffect(() => {
@@ -152,24 +216,36 @@ export default function StaffReportModal({
     }
   };
 
-  const currentStepIdx = statusSteps.indexOf(report.status);
-  const blockName = report.location?.block || report.block;
-  const roomName = report.location?.room || report.room;
+  const currentStepIdx = statusSteps.indexOf(detailReport.status);
+  const blockName = detailReport.location?.block || detailReport.block;
+  const roomName = detailReport.location?.room || detailReport.room;
   const locationString =
     blockName && roomName ? `${blockName} · ${roomName}` : blockName || roomName || "Location unavailable";
-  const rawRole = String(report.reporter_role || report.reporter?.role || "student").toLowerCase();
+  const rawRole = String(detailReport.reporter_role || detailReport.reporter?.role || "student").toLowerCase();
   const roleLabel = rawRole === "faculty" ? "Faculty" : rawRole === "maintenance" ? "Technician" : "Student";
-  const reporterDisplay = report.reporter_name
-    ? `${report.reporter_name} (${roleLabel})`
+  const reporterDisplay = detailReport.reporter_name
+    ? `${detailReport.reporter_name} (${roleLabel})`
     : roleLabel;
-  const fullTimestamp = formatFullTimestamp(report.created_at);
-  const relativeTimestamp = formatRelativeTime(report.created_at);
+  const fullTimestamp = formatFullTimestamp(detailReport.created_at);
+  const relativeTimestamp = formatRelativeTime(detailReport.created_at);
+  const assignedAtTimestamp = detailReport.assigned_at ? formatFullTimestamp(detailReport.assigned_at) : null;
+  const resolvedAtIso = detailResolution?.resolved_at || detailReport.resolved_at || null;
+  const resolvedFullTimestamp = resolvedAtIso ? formatFullTimestamp(resolvedAtIso) : null;
+  const resolvedRelTimestamp = resolvedAtIso ? formatRelativeTime(resolvedAtIso) : null;
+  const resolvedActionText = detailResolution?.action || detailReport.resolution_action || null;
+  const resolvedRemarksRaw =
+    detailResolution?.remarks !== undefined
+      ? detailResolution.remarks
+      : detailReport.resolution_remarks;
+  const hasRemarks = Boolean(resolvedRemarksRaw && String(resolvedRemarksRaw).trim());
+  const resolvedByName =
+    detailResolution?.resolved_by || detailReport.resolved_by || detailReport.assignee_name || null;
 
   return (
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={`Staff Incident #${report.id} Details`}
+      aria-label={`Staff Incident #${detailReport.id} Details`}
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-[2px]"
       onClick={onClose}
     >
@@ -180,13 +256,13 @@ export default function StaffReportModal({
         <div className="flex items-start justify-between gap-4 border-b border-border pb-4">
           <div className="space-y-1.5">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs font-mono text-muted font-medium">#{report.id}</span>
-              <StatusBadge status={report.status} />
-              {report.priority && <PriorityBadge priority={report.priority} />}
-              <span className="text-xs font-medium text-accent">{report.category}</span>
+              <span className="text-xs font-mono text-muted font-medium">#{detailReport.id}</span>
+              <StatusBadge status={detailReport.status} />
+              {detailReport.priority && <PriorityBadge priority={detailReport.priority} />}
+              <span className="text-xs font-medium text-accent">{detailReport.category}</span>
             </div>
             <h2 className="text-lg font-bold text-text leading-snug">
-              {report.title || report.description?.slice(0, 72)}
+              {detailReport.title || detailReport.description?.slice(0, 72)}
             </h2>
           </div>
           <button
@@ -206,6 +282,7 @@ export default function StaffReportModal({
           <div className="flex items-center justify-between gap-2 overflow-x-auto">
             {statusSteps.map((step, idx) => {
               const completed = idx <= currentStepIdx;
+              const isChecked = idx < currentStepIdx || detailReport.status === "resolved";
               return (
                 <div key={step} className="flex items-center gap-2 flex-1 min-w-[80px]">
                   <div
@@ -213,7 +290,7 @@ export default function StaffReportModal({
                       completed ? "bg-accent text-white" : "bg-surface border border-border text-muted"
                     }`}
                   >
-                    {idx < currentStepIdx ? "✓" : idx + 1}
+                    {isChecked ? "✓" : idx + 1}
                   </div>
                   <span className={`text-xs font-medium truncate ${completed ? "text-text" : "text-muted"}`}>
                     {statusStepLabels[step]}
@@ -289,9 +366,108 @@ export default function StaffReportModal({
             Incident Description
           </div>
           <p className="text-sm text-text bg-bg p-3.5 rounded-input border border-border">
-            {report.description}
+            {detailReport.description}
           </p>
         </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+          <div className="p-3 rounded-input bg-bg border border-border">
+            <div className="text-[11px] text-muted">Assigned to</div>
+            <div className="font-semibold text-text flex items-center gap-1.5 mt-0.5 flex-wrap">
+              <span>{detailReport.assignee_name || "Unassigned"}</span>
+              {detailReport.assigned_to && detailReport.assignee_availability === "inactive" && (
+                <span className="px-1.5 py-0.5 rounded-chip text-[10px] font-semibold bg-amber-500/15 text-amber-600 border border-amber-500/30">
+                  Not active
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="p-3 rounded-input bg-bg border border-border">
+            <div className="text-[11px] text-muted">Assigned at</div>
+            <div className="font-semibold text-text mt-0.5" title={assignedAtTimestamp || undefined}>
+              {assignedAtTimestamp || "—"}
+            </div>
+          </div>
+        </div>
+
+        {(detailReport.status === "resolved" || detailResolution) && (
+          <div
+            id="staff-modal-resolution-section"
+            ref={resolutionSectionRef}
+            className="p-4 rounded-card bg-bg border border-border space-y-3"
+          >
+            <div className="text-xs font-semibold text-muted uppercase tracking-wider">
+              Resolution
+            </div>
+            {detailLoading && !resolvedActionText ? (
+              <div className="text-xs text-muted">Loading resolution details...</div>
+            ) : (
+              <div className="space-y-3 text-xs">
+                <div>
+                  <div className="text-[11px] text-muted mb-0.5">Action taken</div>
+                  <div className="font-semibold text-text">
+                    {resolvedActionText || "Completed"}
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[11px] text-muted">Internal remarks</span>
+                    <span className="px-1.5 py-0.5 rounded-chip text-[10px] font-semibold bg-amber-500/15 text-amber-600 border border-amber-500/30">
+                      Internal - staff only
+                    </span>
+                  </div>
+                  <div
+                    className={`p-2.5 rounded-input border border-border bg-surface ${
+                      hasRemarks ? "text-text" : "text-muted italic"
+                    }`}
+                  >
+                    {hasRemarks ? resolvedRemarksRaw : "No remarks added"}
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <div className="text-[11px] text-muted">Resolved by</div>
+                    <div className="font-semibold text-text mt-0.5">
+                      {resolvedByName || "Staff"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-muted">Resolved at</div>
+                    <div
+                      className="font-semibold text-text mt-0.5"
+                      title={resolvedFullTimestamp || undefined}
+                    >
+                      {resolvedFullTimestamp ? (
+                        <>
+                          {resolvedFullTimestamp}
+                          {resolvedRelTimestamp && (
+                            <span className="text-muted font-normal ml-1">
+                              ({resolvedRelTimestamp})
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-muted">Assigned to</div>
+                    <div className="font-semibold text-text mt-0.5">
+                      {detailReport.assignee_name || "Unassigned"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-muted">Assigned at</div>
+                    <div className="font-semibold text-text mt-0.5" title={assignedAtTimestamp || undefined}>
+                      {assignedAtTimestamp || "—"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {report.predictions && report.predictions.length > 0 && (
           <div className="p-3 rounded-input bg-bg border border-border flex items-center justify-between text-xs">
@@ -345,12 +521,23 @@ export default function StaffReportModal({
                     className="w-full h-9 px-2.5 rounded-input border border-border bg-bg text-text"
                   >
                     <option value="">Unassigned</option>
-                    {staff.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name} ({s.email})
-                      </option>
-                    ))}
+                    {staff.map((s) => {
+                      const isInactive = s.availability === "inactive";
+                      return (
+                        <option
+                          key={s.id}
+                          value={s.id}
+                          disabled={isInactive}
+                          style={isInactive ? { color: "#9CA3AF" } : undefined}
+                        >
+                          {s.name} - {isInactive ? "Not active" : "Active"}
+                        </option>
+                      );
+                    })}
                   </select>
+                  <p className="text-[11px] text-muted mt-1">
+                    Not active technicians cannot receive new tickets
+                  </p>
                 </div>
               )}
             </div>

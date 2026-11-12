@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { apiStaffLogin, setStaffToken, isValidStaffJwt } from "@/lib/staffApi";
+import { apiGetPublicConfig, apiStaffLogin, setStaffToken, isValidStaffJwt } from "@/lib/staffApi";
 
 export default function StaffLoginPage() {
   const router = useRouter();
@@ -10,6 +10,21 @@ export default function StaffLoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    apiGetPublicConfig()
+      .then((cfg) => {
+        if (active) setDemoMode(Boolean(cfg?.demo_mode));
+      })
+      .catch(() => {
+        if (active) setDemoMode(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -39,6 +54,9 @@ export default function StaffLoginPage() {
     if (role === "tech1") {
       setEmail("tech1@campus.edu");
       setPassword("DemoPass123!");
+    } else if (role === "tech2") {
+      setEmail("tech2@campus.edu");
+      setPassword("DemoPass123!");
     } else if (role === "admin") {
       setEmail("admin@campus.edu");
       setPassword("DemoPass123!");
@@ -52,13 +70,16 @@ export default function StaffLoginPage() {
         <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 4 }}>Maintenance Technicians &amp; Administrative Staff Only</p>
       </div>
 
-      <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: 10, marginBottom: 16 }}>
-        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", marginBottom: 6 }}>DEMO STAFF QUICK-FILL</div>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button type="button" onClick={() => quickFill("tech1")} style={{ padding: "4px 8px", fontSize: 11, borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", cursor: "pointer" }}>Technician 1</button>
-          <button type="button" onClick={() => quickFill("admin")} style={{ padding: "4px 8px", fontSize: 11, borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", cursor: "pointer" }}>Administrator</button>
+      {demoMode && (
+        <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: 10, marginBottom: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", marginBottom: 6 }}>DEMO STAFF QUICK-FILL</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button type="button" onClick={() => quickFill("tech1")} style={{ padding: "4px 8px", fontSize: 11, borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", cursor: "pointer" }}>Technician 1</button>
+            <button type="button" onClick={() => quickFill("tech2")} style={{ padding: "4px 8px", fontSize: 11, borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", cursor: "pointer" }}>Technician 2</button>
+            <button type="button" onClick={() => quickFill("admin")} style={{ padding: "4px 8px", fontSize: 11, borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", cursor: "pointer" }}>Administrator</button>
+          </div>
         </div>
-      </div>
+      )}
 
       {error && (
         <div style={{ padding: "8px 12px", background: "var(--prio-critical-bg)", color: "var(--prio-critical-text)", border: "1px solid var(--prio-critical-border)", borderRadius: 8, fontSize: 13, marginBottom: 16 }}>

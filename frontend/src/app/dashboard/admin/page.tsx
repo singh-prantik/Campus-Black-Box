@@ -639,12 +639,23 @@ export default function AdminDashboardPage() {
                   className="w-full h-9 px-2 bg-bg border border-border rounded-input text-xs text-text focus:border-accent"
                 >
                   <option value="">Select Technician...</option>
-                  {staff.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} ({s.assigned_count} active tickets)
-                    </option>
-                  ))}
+                  {staff.map((s) => {
+                    const isInactive = s.availability === "inactive";
+                    return (
+                      <option
+                        key={s.id}
+                        value={s.id}
+                        disabled={isInactive}
+                        style={isInactive ? { color: "#9CA3AF" } : undefined}
+                      >
+                        {s.name} - {isInactive ? "Not active" : "Active"}
+                      </option>
+                    );
+                  })}
                 </select>
+                <p className="text-[11px] text-muted mt-1">
+                  Not active technicians cannot receive new tickets
+                </p>
               </div>
               <div className="flex justify-end gap-2 pt-2">
                 <button

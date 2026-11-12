@@ -16,7 +16,7 @@ import {
 } from "@/lib/staffApi";
 import { formatFullTimestamp, formatRelativeTime } from "@/lib/time";
 import { Report, AnalyticsSummary, StaffMember } from "@/types";
-import { Camera, Search, X } from "lucide-react";
+import { Camera, FileText, Search, X } from "lucide-react";
 
 function formatRoleLabel(role: string | null | undefined): string {
   const lower = String(role || "student").toLowerCase();
@@ -45,8 +45,10 @@ export default function StaffAdminPage() {
   const [assignModalReport, setAssignModalReport] = useState<Report | null>(null);
   const [resolveModalReport, setResolveModalReport] = useState<Report | null>(null);
   const [detailModalReport, setDetailModalReport] = useState<Report | null>(null);
+  const [detailFocusResolution, setDetailFocusResolution] = useState(false);
   const [photoLightboxReport, setPhotoLightboxReport] = useState<Report | null>(null);
   const [selectedStaffId, setSelectedStaffId] = useState<number | "">("");
+  const [assignLoadingStaff, setAssignLoadingStaff] = useState(false);
   const [actionText, setActionText] = useState("");
   const [remarksText, setRemarksText] = useState("");
 
@@ -97,13 +99,45 @@ export default function StaffAdminPage() {
     Boolean(filterPriority) ||
     Boolean(searchQuery.trim());
 
+  function sortStaffActiveFirst(list: StaffMember[]): StaffMember[] {
+    return [...list].sort((a, b) => {
+      const aInact = a.availability === "inactive" ? 1 : 0;
+      const bInact = b.availability === "inactive" ? 1 : 0;
+      if (aInact !== bInact) return aInact - bInact;
+      return a.id - b.id;
+    });
+  }
+
+  async function openAssignDialog(report: Report) {
+    setAssignModalReport(report);
+    const cachedActive = sortStaffActiveFirst(staff).filter((s) => s.availability !== "inactive");
+    const currentIsActive = cachedActive.some((s) => s.id === report.assigned_to);
+    setSelectedStaffId(currentIsActive && report.assigned_to ? report.assigned_to : cachedActive[0]?.id || "");
+    setAssignLoadingStaff(true);
+    try {
+      const fresh = await apiGetStaff();
+      const sorted = sortStaffActiveFirst(fresh.staff || []);
+      setStaff(sorted);
+      const activeOnly = sorted.filter((s) => s.availability !== "inactive");
+      const freshCurrentIsActive = activeOnly.some((s) => s.id === report.assigned_to);
+      setSelectedStaffId(
+        freshCurrentIsActive && report.assigned_to ? report.assigned_to : activeOnly[0]?.id || ""
+      );
+    } catch {
+      // Keep cached list if refetch fails
+    } finally {
+      setAssignLoadingStaff(false);
+    }
+  }
+
   async function handleAssign() {
     if (!assignModalReport || !selectedStaffId) return;
     try {
-      await apiUpdateReport(assignModalReport.id, {
-        assigned_to: Number(selectedStaffId),
-        status: "assigned",
-      });
+      const payload =
+        assignModalReport.status === "pending"
+          ? { assigned_to: Number(selectedStaffId), status: "assigned" }
+          : { assigned_to: Number(selectedStaffId) };
+      await apiUpdateReport(assignModalReport.id, payload);
       setAssignModalReport(null);
       setSelectedStaffId("");
       loadData();
@@ -331,10 +365,18 @@ export default function StaffAdminPage() {
                     (r.assigned_to ? `Technician #${r.assigned_to}` : "Unassigned");
                   const hasPhoto = Boolean(r.has_photo);
 
+                  const isAssigneeInactive =
+                    Boolean(r.assigned_to) &&
+                    (r.assignee_availability === "inactive" ||
+                      assigneeStaff?.availability === "inactive");
+
                   return (
                     <tr
                       key={r.id}
-                      onClick={() => setDetailModalReport(r)}
+                      onClick={() => {
+                        setDetailFocusResolution(false);
+                        setDetailModalReport(r);
+                      }}
                       className="hover:bg-bg/40 cursor-pointer transition-colors"
                     >
                       <td className="py-3 px-3.5 font-bold text-accent whitespace-nowrap">
@@ -358,15 +400,22 @@ export default function StaffAdminPage() {
                         <StatusBadge status={r.status} />
                       </td>
                       <td className="py-3 px-3.5 whitespace-nowrap">
-                        <span
-                          className={`px-2 py-0.5 rounded-chip text-[11px] font-medium border ${
-                            r.assigned_to
-                              ? "bg-bg text-text border-border"
-                              : "bg-surface text-muted border-border"
-                          }`}
-                        >
-                          {assigneeDisplay}
-                        </span>
+                        <div className="inline-flex items-center gap-1.5 flex-wrap">
+                          <span
+                            className={`px-2 py-0.5 rounded-chip text-[11px] font-medium border ${
+                              r.assigned_to
+                                ? "bg-bg text-text border-border"
+                                : "bg-surface text-muted border-border"
+                            }`}
+                          >
+                            {assigneeDisplay}
+                          </span>
+                          {isAssigneeInactive && (
+                            <span className="px-1.5 py-0.5 rounded-chip text-[10px] font-semibold bg-amber-500/15 text-amber-600 border border-amber-500/30">
+                              Not active
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3 px-3.5 whitespace-nowrap text-muted">
                         Reported by <span className="text-text font-medium">{reporterText}</span>
@@ -392,41 +441,72 @@ export default function StaffAdminPage() {
                         className="py-3 px-3.5 text-right whitespace-nowrap"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        {r.status === "pending" && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setAssignModalReport(r);
-                              setSelectedStaffId(staff[0]?.id || "");
-                            }}
-                            className="px-2.5 py-1 bg-accent text-white rounded-input text-[11px] font-semibold hover:bg-accent-hover"
-                          >
-                            Assign
-                          </button>
-                        )}
-                        {r.status === "assigned" && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              apiUpdateReport(r.id, { status: "in_progress" }).then(loadData)
-                            }
-                            className="px-2.5 py-1 bg-bg border border-border text-text rounded-input text-[11px] font-semibold hover:border-accent"
-                          >
-                            Start Work
-                          </button>
-                        )}
-                        {r.status === "in_progress" && (
-                          <button
-                            type="button"
-                            onClick={() => setResolveModalReport(r)}
-                            className="px-2.5 py-1 bg-emerald-600 text-white rounded-input text-[11px] font-semibold hover:bg-emerald-700"
-                          >
-                            Resolve
-                          </button>
-                        )}
-                        {r.status === "resolved" && (
-                          <span className="text-muted text-[11px]">Closed</span>
-                        )}
+                        <div className="inline-flex items-center justify-end gap-1.5">
+                          {r.status === "pending" && (
+                            <button
+                              type="button"
+                              onClick={() => openAssignDialog(r)}
+                              className="px-2.5 py-1 bg-accent text-white rounded-input text-[11px] font-semibold hover:bg-accent-hover"
+                            >
+                              Assign
+                            </button>
+                          )}
+                          {r.status === "assigned" && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  apiUpdateReport(r.id, { status: "in_progress" }).then(loadData)
+                                }
+                                className="px-2.5 py-1 bg-bg border border-border text-text rounded-input text-[11px] font-semibold hover:border-accent"
+                              >
+                                Start Work
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => openAssignDialog(r)}
+                                className="px-2.5 py-1 bg-bg border border-border text-text rounded-input text-[11px] font-semibold hover:border-accent"
+                              >
+                                Reassign
+                              </button>
+                            </>
+                          )}
+                          {r.status === "in_progress" && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => setResolveModalReport(r)}
+                                className="px-2.5 py-1 bg-emerald-600 text-white rounded-input text-[11px] font-semibold hover:bg-emerald-700"
+                              >
+                                Resolve
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => openAssignDialog(r)}
+                                className="px-2.5 py-1 bg-bg border border-border text-text rounded-input text-[11px] font-semibold hover:border-accent"
+                              >
+                                Reassign
+                              </button>
+                            </>
+                          )}
+                          {r.status === "resolved" && (
+                            <>
+                              <button
+                                type="button"
+                                aria-label="View resolution notes"
+                                title="View resolution notes"
+                                onClick={() => {
+                                  setDetailFocusResolution(true);
+                                  setDetailModalReport(r);
+                                }}
+                                className="p-1.5 rounded-input border border-border bg-bg text-muted hover:text-accent hover:border-accent inline-flex items-center justify-center"
+                              >
+                                <FileText className="w-3.5 h-3.5 stroke-[1.5]" />
+                              </button>
+                              <span className="text-muted text-[11px]">Closed</span>
+                            </>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -439,19 +519,37 @@ export default function StaffAdminPage() {
         {assignModalReport && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-surface border border-border rounded-card p-6 max-w-sm w-full space-y-4">
-              <h3 className="text-base font-bold">Assign Ticket #{assignModalReport.id}</h3>
-              <select
-                value={selectedStaffId}
-                onChange={(e) => setSelectedStaffId(Number(e.target.value))}
-                className="w-full h-9 px-3 rounded-input border border-border bg-bg text-xs text-text"
-              >
-                <option value="">Select Technician...</option>
-                {staff.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} ({s.assigned_count} active)
+              <h3 className="text-base font-bold">
+                {assignModalReport.assigned_to ? "Reassign" : "Assign"} Ticket #{assignModalReport.id}
+              </h3>
+              <div>
+                <select
+                  aria-label="Select Technician"
+                  value={selectedStaffId}
+                  onChange={(e) => setSelectedStaffId(e.target.value ? Number(e.target.value) : "")}
+                  className="w-full h-9 px-3 rounded-input border border-border bg-bg text-xs text-text"
+                >
+                  <option value="">
+                    {assignLoadingStaff ? "Refreshing availability..." : "Select Technician..."}
                   </option>
-                ))}
-              </select>
+                  {sortStaffActiveFirst(staff).map((s) => {
+                    const isInactive = s.availability === "inactive";
+                    return (
+                      <option
+                        key={s.id}
+                        value={s.id}
+                        disabled={isInactive}
+                        style={isInactive ? { color: "#9CA3AF" } : undefined}
+                      >
+                        {s.name} - {isInactive ? "Not active" : "Active"}
+                      </option>
+                    );
+                  })}
+                </select>
+                <p className="text-[11px] text-muted mt-1.5">
+                  Not active technicians cannot receive new tickets
+                </p>
+              </div>
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
@@ -463,7 +561,8 @@ export default function StaffAdminPage() {
                 <button
                   type="button"
                   onClick={handleAssign}
-                  className="px-3 py-1.5 rounded-input bg-accent text-white text-xs font-semibold"
+                  disabled={!selectedStaffId}
+                  className="px-3 py-1.5 rounded-input bg-accent text-white text-xs font-semibold disabled:opacity-50"
                 >
                   Confirm
                 </button>
@@ -520,7 +619,11 @@ export default function StaffAdminPage() {
         {detailModalReport && (
           <StaffReportModal
             report={detailModalReport}
-            onClose={() => setDetailModalReport(null)}
+            focusResolution={detailFocusResolution}
+            onClose={() => {
+              setDetailModalReport(null);
+              setDetailFocusResolution(false);
+            }}
             onUpdate={() => {
               loadData();
             }}

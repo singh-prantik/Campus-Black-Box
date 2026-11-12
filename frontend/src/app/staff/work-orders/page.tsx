@@ -6,10 +6,18 @@ import StaffNavbar from "@/components/StaffNavbar";
 import StaffReportModal from "@/components/StaffReportModal";
 import PhotoLightboxModal from "@/components/PhotoLightboxModal";
 import { StatusBadge, PriorityBadge } from "@/components/StatusBadge";
-import { apiGetReports, apiUpdateReport, apiResolveReport, useStaffSession } from "@/lib/staffApi";
+import {
+  apiGetReports,
+  apiGetStaffProfile,
+  apiUpdateMyAvailability,
+  apiUpdateReport,
+  apiResolveReport,
+  useStaffSession,
+} from "@/lib/staffApi";
 import { formatFullTimestamp, formatRelativeTime } from "@/lib/time";
 import { Report } from "@/types";
-import { Camera, Clock } from "lucide-react";
+import toast from "react-hot-toast";
+import { Camera, Clock, FileText } from "lucide-react";
 
 function formatRoleLabel(role: string | null | undefined): string {
   const lower = String(role || "student").toLowerCase();
@@ -26,11 +34,14 @@ function formatLocation(r: Report): string {
 }
 
 export default function TechnicianWorkOrdersPage() {
-  const { isAuthenticated, loading: authLoading } = useStaffSession();
+  const { user, isAuthenticated, loading: authLoading } = useStaffSession();
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);
+  const [availability, setAvailability] = useState<"active" | "inactive">("active");
+  const [updatingAvailability, setUpdatingAvailability] = useState(false);
   const [resolveModalReport, setResolveModalReport] = useState<Report | null>(null);
   const [detailModalReport, setDetailModalReport] = useState<Report | null>(null);
+  const [detailFocusResolution, setDetailFocusResolution] = useState(false);
   const [photoLightboxReport, setPhotoLightboxReport] = useState<Report | null>(null);
   const [actionText, setActionText] = useState("");
   const [remarksText, setRemarksText] = useState("");
@@ -41,7 +52,15 @@ export default function TechnicianWorkOrdersPage() {
       return;
     }
     loadWorkOrders();
-  }, [authLoading, isAuthenticated]);
+    if (user?.role === "maintenance") {
+      apiGetStaffProfile()
+        .then((res) => {
+          const val = res?.user?.availability === "inactive" ? "inactive" : "active";
+          setAvailability(val);
+        })
+        .catch(() => {});
+    }
+  }, [authLoading, isAuthenticated, user?.role]);
 
   async function loadWorkOrders() {
     setLoading(true);
@@ -52,6 +71,34 @@ export default function TechnicianWorkOrdersPage() {
       setReports([]);
     } finally {
       setLoading(false);
+    }
+  }
+
+  const openTicketCount = reports.filter((r) => r.status !== "resolved").length;
+
+  async function handleToggleAvailability() {
+    if (updatingAvailability || user?.role !== "maintenance") return;
+    const prev = availability;
+    const next: "active" | "inactive" = prev === "active" ? "inactive" : "active";
+    setAvailability(next);
+    setUpdatingAvailability(true);
+    try {
+      const res = await apiUpdateMyAvailability(next);
+      const saved: "active" | "inactive" =
+        res?.user?.availability === "inactive" ? "inactive" : "active";
+      setAvailability(saved);
+      if (saved === "inactive" && openTicketCount > 0) {
+        toast(
+          `You still have ${openTicketCount} open tickets. Admins will not assign you new ones while you are Not active.`
+        );
+      } else {
+        toast.success(`Availability updated to ${saved === "active" ? "Active" : "Not active"}`);
+      }
+    } catch (err: any) {
+      setAvailability(prev);
+      toast.error(err?.message || "Failed to update availability");
+    } finally {
+      setUpdatingAvailability(false);
     }
   }
 
@@ -110,21 +157,69 @@ export default function TechnicianWorkOrdersPage() {
     <div className="min-h-screen bg-bg text-text">
       <StaffNavbar />
       <div className="max-w-5xl mx-auto px-4 py-8 space-y-5">
-        <div className="flex justify-between items-center">
+        <div className="flex flex-wrap justify-between items-center gap-4">
           <div>
-            <h1 className="text-2xl font-bold">My Assigned Work Orders</h1>
+            <h1 className="text-2xl font-bold">
+              {user?.name ? `${user.name} — Work Orders` : "My Assigned Work Orders"}
+            </h1>
             <p className="text-muted text-xs mt-0.5">
-              Work orders assigned to your maintenance technician profile.
+              {user?.name
+                ? `Work orders assigned to ${user.name}`
+                : "Work orders assigned to your maintenance technician profile."}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={loadWorkOrders}
-            className="px-3.5 py-2 rounded-input border border-border bg-surface text-xs font-medium hover:border-accent"
-          >
-            Refresh
-          </button>
+          <div className="flex items-center gap-3 flex-wrap">
+            {user?.role === "maintenance" && (
+              <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-input border border-border bg-surface text-xs">
+                <span className="text-muted font-medium">
+                  My availability:{" "}
+                  <strong
+                    className={
+                      availability === "active" ? "text-emerald-600" : "text-amber-600"
+                    }
+                  >
+                    {availability === "active" ? "Active" : "Not active"}
+                  </strong>
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={availability === "active"}
+                  aria-label={`My availability: ${availability === "active" ? "Active" : "Not active"}`}
+                  disabled={updatingAvailability}
+                  onClick={handleToggleAvailability}
+                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors ${
+                    availability === "active"
+                      ? "bg-emerald-600 border-emerald-600"
+                      : "bg-muted/30 border-border"
+                  } ${updatingAvailability ? "opacity-60 cursor-wait" : "cursor-pointer"}`}
+                >
+                  <span
+                    className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${
+                      availability === "active" ? "translate-x-4" : "translate-x-1"
+                    }`}
+                  />
+                </button>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={loadWorkOrders}
+              className="px-3.5 py-2 rounded-input border border-border bg-surface text-xs font-medium hover:border-accent"
+            >
+              Refresh
+            </button>
+          </div>
         </div>
+
+        {user?.role === "maintenance" && availability === "inactive" && openTicketCount > 0 && (
+          <div
+            role="status"
+            className="p-3 rounded-card border border-amber-500/30 bg-amber-500/10 text-xs text-amber-700 font-medium"
+          >
+            You still have {openTicketCount} open tickets. Admins will not assign you new ones while you are Not active.
+          </div>
+        )}
 
         {loading ? (
           <div className="py-12 text-center text-muted text-xs">Loading work orders...</div>
@@ -163,7 +258,10 @@ export default function TechnicianWorkOrdersPage() {
                   return (
                     <tr
                       key={r.id}
-                      onClick={() => setDetailModalReport(r)}
+                      onClick={() => {
+                        setDetailFocusResolution(false);
+                        setDetailModalReport(r);
+                      }}
                       className="hover:bg-bg/40 cursor-pointer transition-colors"
                     >
                       <td className="py-3 px-3.5 font-bold text-accent whitespace-nowrap">
@@ -229,7 +327,20 @@ export default function TechnicianWorkOrdersPage() {
                           </button>
                         )}
                         {r.status === "resolved" && (
-                          <span className="text-muted text-[11px]">Completed</span>
+                          <div className="inline-flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              aria-label="View resolution notes"
+                              onClick={() => {
+                                setDetailFocusResolution(true);
+                                setDetailModalReport(r);
+                              }}
+                              className="p-1.5 rounded-input border border-border bg-bg text-muted hover:text-accent hover:border-accent inline-flex items-center justify-center"
+                            >
+                              <FileText className="w-3.5 h-3.5 stroke-[1.5]" />
+                            </button>
+                            <span className="text-muted text-[11px]">Completed</span>
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -292,7 +403,11 @@ export default function TechnicianWorkOrdersPage() {
         {detailModalReport && (
           <StaffReportModal
             report={detailModalReport}
-            onClose={() => setDetailModalReport(null)}
+            focusResolution={detailFocusResolution}
+            onClose={() => {
+              setDetailModalReport(null);
+              setDetailFocusResolution(false);
+            }}
             onUpdate={() => loadWorkOrders()}
           />
         )}

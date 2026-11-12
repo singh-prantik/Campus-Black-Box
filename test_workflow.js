@@ -1322,6 +1322,139 @@ async function runTests() {
   );
 
   // -------------------------------------------------------------
+  // AC11: TECHNICIAN AVAILABILITY, INTERNAL REMARKS & SAFETY RULE
+  // -------------------------------------------------------------
+
+  // AC11.1: Technician can PATCH own availability; admin/reporter get 403; client user_id cannot alter tech2
+  const adminPatchAvail = await request("PATCH", "/api/staff/me/availability", { availability: "inactive" }, adminToken);
+  const stuPatchAvail = await request("PATCH", "/api/staff/me/availability", { availability: "inactive" }, studentToken);
+  const t1PatchSpoof = await request("PATCH", "/api/staff/me/availability", { availability: "inactive", user_id: 4, id: 4 }, tech1Token);
+  const t1MeAfter = await request("GET", "/api/staff/me", null, tech1Token);
+  const t2MeUnchanged = await request("GET", "/api/staff/me", null, tech2Token);
+
+  assert(
+    adminPatchAvail.status === 403 &&
+    stuPatchAvail.status === 403 &&
+    t1PatchSpoof.status === 200 &&
+    t1MeAfter.status === 200 &&
+    t1MeAfter.body.user?.availability === "inactive" &&
+    t2MeUnchanged.status === 200 &&
+    t2MeUnchanged.body.user?.availability === "active",
+    "AC11.1",
+    "Technician can PATCH own availability; admin/reporter get 403; client user_id cannot change another technician"
+  );
+
+  // Restore tech1 back to active for subsequent assignment checks
+  await request("PATCH", "/api/staff/me/availability", { availability: "active" }, tech1Token);
+
+  // AC11.2: Invalid availability value returns 400
+  const invalidAvail1 = await request("PATCH", "/api/staff/me/availability", { availability: "busy" }, tech1Token);
+  const invalidAvail2 = await request("PATCH", "/api/staff/me/availability", { availability: "" }, tech1Token);
+  const invalidAvail3 = await request("PATCH", "/api/staff/me/availability", {}, tech1Token);
+  assert(
+    invalidAvail1.status === 400 && invalidAvail2.status === 400 && invalidAvail3.status === 400,
+    "AC11.2",
+    "Invalid availability values return 400 Bad Request"
+  );
+
+  // AC11.3: GET /api/staff/staff returns availability; assign/reassign to inactive returns 400; active succeeds
+  const t2SetInactive = await request("PATCH", "/api/staff/me/availability", { availability: "inactive" }, tech2Token);
+  const staffDirRes = await request("GET", "/api/staff/staff", null, adminToken);
+  const tech2Entry = (staffDirRes.body.staff || []).find(s => s.id === 4);
+  const tech1Entry = (staffDirRes.body.staff || []).find(s => s.id === 3);
+
+  const assignToInactiveRes = await request("PUT", `/api/staff/reports/${unassignedId}`, {
+    status: "assigned",
+    assigned_to: 4
+  }, adminToken);
+  const assignToActiveRes = await request("PUT", `/api/staff/reports/${unassignedId}`, {
+    status: "assigned",
+    assigned_to: 3
+  }, adminToken);
+  const reassignToInactiveRes = await request("PUT", `/api/staff/reports/${unassignedId}`, {
+    assigned_to: 4
+  }, adminToken);
+
+  assert(
+    t2SetInactive.status === 200 &&
+    staffDirRes.status === 200 &&
+    tech2Entry?.availability === "inactive" &&
+    Boolean(tech2Entry?.availability_updated_at) &&
+    tech1Entry?.availability === "active" &&
+    assignToInactiveRes.status === 400 &&
+    /not active/i.test(String(assignToInactiveRes.body?.detail || "")) &&
+    assignToActiveRes.status === 200 &&
+    assignToActiveRes.body.assigned_to === 3 &&
+    reassignToInactiveRes.status === 400 &&
+    /not active/i.test(String(reassignToInactiveRes.body?.detail || "")),
+    "AC11.3",
+    "GET /api/staff/staff returns availability; assigning or reassigning to inactive technician returns 400 while active succeeds"
+  );
+
+  // AC11.4: Existing ticket stays in an inactive technician's list
+  const t2ListWhileInactive = await request("GET", "/api/staff/reports", null, tech2Token);
+  const t2HasAssignedWhileInactive = (t2ListWhileInactive.body.reports || []).some(r => r.id === idA && r.assigned_to === 4);
+  assert(
+    t2ListWhileInactive.status === 200 && t2HasAssignedWhileInactive,
+    "AC11.4",
+    "Existing assigned tickets stay in an inactive technician's work order list"
+  );
+
+  // Restore tech2 to active so both technicians end AC11 in clean active state
+  await request("PATCH", "/api/staff/me/availability", { availability: "active" }, tech2Token);
+
+  // AC11.5: Availability change writes a technician_availability_log row
+  const availLogsTech2 = db.prepare(`
+    SELECT user_id, from_value, to_value, changed_at
+    FROM technician_availability_log
+    WHERE user_id = 4
+    ORDER BY id ASC
+  `).all();
+  assert(
+    availLogsTech2.length >= 2 &&
+    availLogsTech2[0].from_value === "active" &&
+    availLogsTech2[0].to_value === "inactive" &&
+    availLogsTech2[1].from_value === "inactive" &&
+    availLogsTech2[1].to_value === "active" &&
+    availLogsTech2.every(l => typeof l.changed_at === "string" && l.changed_at.endsWith("Z")),
+    "AC11.5",
+    "Availability changes write audit rows in technician_availability_log with UTC ISO timestamps"
+  );
+
+  // AC11.6: Resolved ticket admin detail returns action, remarks, resolved_by, resolved_at; reporter responses never contain remarks
+  const adminRes9 = await request("GET", "/api/staff/reports/9", null, adminToken);
+  const facultyMineRes = await request("GET", "/api/reports/mine", null, facultyToken);
+  const facultyDet9 = await request("GET", "/api/reports/9", null, facultyToken);
+  assert(
+    adminRes9.status === 200 &&
+    Boolean(adminRes9.body.resolution?.action) &&
+    adminRes9.body.resolution?.remarks === "Fuse changed and load-tested at 15A; safe for lab sessions" &&
+    adminRes9.body.resolution?.resolved_by === "Technician 2" &&
+    Boolean(adminRes9.body.resolution?.resolved_at) &&
+    !containsRemarksKeyOrText(facultyDet9.body) &&
+    !containsRemarksKeyOrText(facultyMineRes.body),
+    "AC11.6",
+    "Resolved ticket admin detail returns action, remarks, resolved_by, resolved_at; reporter endpoints never contain remarks"
+  );
+
+  // AC11.7: "Fire broke out" is Critical via the safety rule
+  const fireCreateRes = await request("POST", "/api/reports", {
+    description: "Fire broke out",
+    location_id: 6,
+    category: "Safety"
+  }, studentToken, ac10Hdrs);
+  const fireId = fireCreateRes.body?.report?.id;
+  const fireStaffDet = await request("GET", `/api/staff/reports/${fireId}`, null, adminToken);
+  assert(
+    fireCreateRes.status === 201 &&
+    fireStaffDet.status === 200 &&
+    fireStaffDet.body.report?.priority === "critical" &&
+    fireStaffDet.body.report?.safety_rule_matched === "smoke_fire_flame",
+    "AC11.7",
+    `Report "Fire broke out" (ID #${fireId}) is classified Critical via safety rule '${fireStaffDet.body.report?.safety_rule_matched}'`
+  );
+
+  // -------------------------------------------------------------
   // SUMMARY
   // -------------------------------------------------------------
   console.log("\n=======================================================");

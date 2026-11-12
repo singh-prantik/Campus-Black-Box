@@ -296,6 +296,8 @@ db.exec(`
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'student',
     department TEXT,
+    availability TEXT NOT NULL DEFAULT 'active',
+    availability_updated_at TEXT,
     created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
@@ -403,12 +405,21 @@ db.exec(`
     FOREIGN KEY(report_id) REFERENCES reports(id),
     FOREIGN KEY(corrected_by) REFERENCES users(id)
   );
+
+  CREATE TABLE IF NOT EXISTS technician_availability_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    from_value TEXT NOT NULL,
+    to_value TEXT NOT NULL,
+    changed_at TEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+  );
 `);
 
 // Migrations
 function migrateLegacyTimestampsToIsoUtc() {
   const tableColumns = [
-    ["users", ["created_at"]],
+    ["users", ["created_at", "availability_updated_at"]],
     ["locations", ["created_at"]],
     ["reports", ["created_at", "updated_at", "resolved_at"]],
     ["resolutions", ["created_at"]],
@@ -416,7 +427,8 @@ function migrateLegacyTimestampsToIsoUtc() {
     ["notifications", ["read_at", "created_at"]],
     ["ai_predictions", ["created_at"]],
     ["report_updates", ["created_at"]],
-    ["category_corrections", ["created_at"]]
+    ["category_corrections", ["created_at"]],
+    ["technician_availability_log", ["changed_at"]]
   ];
 
   for (const [table, cols] of tableColumns) {
@@ -436,6 +448,17 @@ function migrateLegacyTimestampsToIsoUtc() {
     }
   }
 }
+
+try {
+  const userCols = db.prepare("PRAGMA table_info(users)").all();
+  if (!userCols.some(c => c.name === "availability")) {
+    db.exec("ALTER TABLE users ADD COLUMN availability TEXT NOT NULL DEFAULT 'active'");
+  }
+  if (!userCols.some(c => c.name === "availability_updated_at")) {
+    db.exec("ALTER TABLE users ADD COLUMN availability_updated_at TEXT");
+  }
+  db.exec("UPDATE users SET availability = 'active' WHERE availability IS NULL OR availability NOT IN ('active', 'inactive')");
+} catch {}
 
 try {
   const locCols = db.prepare("PRAGMA table_info(locations)").all();
@@ -758,6 +781,7 @@ function seedData(forceReset = false) {
   console.log("Seeding Campus Black Box sample data with strict lifecycle rules...");
 
   db.exec(`
+    DROP TABLE IF EXISTS technician_availability_log;
     DROP TABLE IF EXISTS category_corrections;
     DROP TABLE IF EXISTS report_updates;
     DROP TABLE IF EXISTS notifications;
@@ -775,7 +799,18 @@ function seedData(forceReset = false) {
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'student',
       department TEXT,
+      availability TEXT NOT NULL DEFAULT 'active',
+      availability_updated_at TEXT,
       created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS technician_availability_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      from_value TEXT NOT NULL,
+      to_value TEXT NOT NULL,
+      changed_at TEXT NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id)
     );
 
     CREATE TABLE IF NOT EXISTS locations (
@@ -1338,6 +1373,7 @@ function buildStaffReportPayload(row) {
     has_photo: hasPhoto,
     assigned_to: row.assigned_to ?? null,
     assignee_name: row.assignee_name ?? null,
+    assignee_availability: row.assignee_availability ?? null,
     assigned_at: meta.assigned_at,
     resolution: meta.resolution,
     resolution_action: meta.resolution ? meta.resolution.action : null,
@@ -1375,6 +1411,7 @@ function fetchSanitizedStaffReportById(reportId) {
   const row = db.prepare(`
     SELECT r.*, u.name as reporter_name, u.role as reporter_role,
            l.block, l.room, l.location_type, a.name as assignee_name,
+           COALESCE(a.availability, 'active') as assignee_availability,
            ap.category_confidence, ap.duplicate_score, ap.duplicate_of, ap.model_version
     FROM reports r
     LEFT JOIN users u ON r.user_id = u.id
@@ -1428,7 +1465,12 @@ function getAuthUser(req) {
   const payload = verifyJwt(token);
   if (!payload || !payload.userId) return null;
 
-  const user = db.prepare("SELECT id, name, email, role, department FROM users WHERE id = ?").get(payload.userId);
+  const user = db.prepare(`
+    SELECT id, name, email, role, department,
+           COALESCE(availability, 'active') as availability,
+           availability_updated_at
+    FROM users WHERE id = ?
+  `).get(payload.userId);
   if (!user) return null;
   user.aud = payload.aud || null;
   return user;
@@ -1522,7 +1564,9 @@ async function handleRequest(req, res) {
         name: user.name,
         email: user.email,
         role: user.role,
-        department: user.department
+        department: user.department,
+        availability: user.availability || "active",
+        availability_updated_at: user.availability_updated_at ?? null
       }
     });
   }
@@ -1567,7 +1611,9 @@ async function handleRequest(req, res) {
         name: user.name,
         email: user.email,
         role: user.role,
-        department: user.department
+        department: user.department,
+        availability: user.availability || "active",
+        availability_updated_at: user.availability_updated_at ?? null
       }
     });
   }
@@ -1602,6 +1648,9 @@ async function handleRequest(req, res) {
         name: user.name,
         email: user.email,
         role: user.role,
+        department: user.department,
+        availability: user.availability || "active",
+        availability_updated_at: user.availability_updated_at ?? null,
         aud: "staff"
       }
     });
@@ -2069,6 +2118,61 @@ async function handleRequest(req, res) {
       return sendJson(res, 403, { detail: "Forbidden: Staff portal access required" });
     }
 
+    // 0a. Staff: Current Profile & Availability (GET /api/staff/me)
+    if (pathname === "/api/staff/me" && method === "GET") {
+      return sendJson(res, 200, {
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          department: user.department,
+          availability: user.availability || "active",
+          availability_updated_at: user.availability_updated_at ?? null,
+          aud: "staff"
+        }
+      });
+    }
+
+    // 0b. Staff: Technician Self-Availability Toggle (PATCH /api/staff/me/availability)
+    if (pathname === "/api/staff/me/availability" && method === "PATCH") {
+      if (user.role !== "maintenance") {
+        return sendJson(res, 403, { detail: "Forbidden: Only maintenance technicians can update their own availability" });
+      }
+      const body = await parseRequestBody(req);
+      const nextAvailability = body ? body.availability : undefined;
+      if (nextAvailability !== "active" && nextAvailability !== "inactive") {
+        return sendJson(res, 400, { detail: "Invalid availability value. Allowed values: 'active' or 'inactive'" });
+      }
+      // Strictly applies to the authenticated caller's own user.id; never trusts client-provided user ids
+      const fromValue = user.availability || "active";
+      const nowIso = toIsoUtc();
+      db.prepare(`
+        UPDATE users
+        SET availability = ?, availability_updated_at = ?
+        WHERE id = ?
+      `).run(nextAvailability, nowIso, user.id);
+
+      db.prepare(`
+        INSERT INTO technician_availability_log (user_id, from_value, to_value, changed_at)
+        VALUES (?, ?, ?, ?)
+      `).run(user.id, fromValue, nextAvailability, nowIso);
+
+      return sendJson(res, 200, {
+        success: true,
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          department: user.department,
+          availability: nextAvailability,
+          availability_updated_at: nowIso,
+          aud: "staff"
+        }
+      });
+    }
+
     // 1. Staff: List Reports with Whitelist Filter Validation (FR-13, AC6.8)
     if (pathname === "/api/staff/reports" && method === "GET") {
       const status = parsedUrl.searchParams.get("status");
@@ -2101,6 +2205,7 @@ async function handleRequest(req, res) {
                u.name as reporter_name, u.role as reporter_role,
                l.block, l.room, l.location_type, l.latitude, l.longitude,
                s.name as assignee_name, s.role as assignee_role,
+               COALESCE(s.availability, 'active') as assignee_availability,
                p.category_confidence, p.duplicate_score, p.duplicate_of, p.model_version,
                COALESCE(upd.cnt, 0) as similar_updates_count
         FROM reports r
@@ -2187,6 +2292,7 @@ async function handleRequest(req, res) {
                u.name as reporter_name, u.role as reporter_role,
                l.block, l.room, l.location_type, l.latitude, l.longitude,
                s.name as assignee_name, s.role as assignee_role,
+               COALESCE(s.availability, 'active') as assignee_availability,
                ap.category_confidence, ap.duplicate_score, ap.duplicate_of, ap.model_version
         FROM reports r
         LEFT JOIN users u ON r.user_id = u.id
@@ -2667,9 +2773,12 @@ async function handleRequest(req, res) {
           if (!requestedAssignee) {
             return sendJson(res, 400, { detail: "Must choose an active Maintenance technician when assigning" });
           }
-          const staffUser = db.prepare("SELECT id, role, name FROM users WHERE id = ?").get(requestedAssignee);
+          const staffUser = db.prepare("SELECT id, role, name, COALESCE(availability, 'active') as availability FROM users WHERE id = ?").get(requestedAssignee);
           if (!staffUser || staffUser.role !== "maintenance") {
             return sendJson(res, 400, { detail: "Assignee must be an active maintenance technician" });
+          }
+          if (staffUser.availability !== "active") {
+            return sendJson(res, 400, { detail: "Technician is not active" });
           }
           db.prepare(`
             INSERT INTO resolutions (report_id, staff_id, action, remarks, created_at)
@@ -2720,9 +2829,12 @@ async function handleRequest(req, res) {
           if (user.role !== "admin" && user.role !== "super_admin") {
             return sendJson(res, 403, { detail: "Only administrators can reassign tickets" });
           }
-          const staffUser = db.prepare("SELECT id, role, name FROM users WHERE id = ?").get(requestedAssignee);
+          const staffUser = db.prepare("SELECT id, role, name, COALESCE(availability, 'active') as availability FROM users WHERE id = ?").get(requestedAssignee);
           if (!staffUser || staffUser.role !== "maintenance") {
             return sendJson(res, 400, { detail: "Assignee must be an active maintenance technician" });
+          }
+          if (staffUser.availability !== "active") {
+            return sendJson(res, 400, { detail: "Technician is not active" });
           }
           db.prepare(`
             INSERT INTO resolutions (report_id, staff_id, action, remarks, created_at)
@@ -2920,12 +3032,11 @@ async function handleRequest(req, res) {
       }
       const staff = db.prepare(`
         SELECT u.id, u.name, u.email, u.department,
-               COUNT(r.id) as assigned_count
+               COALESCE(u.availability, 'active') as availability,
+               u.availability_updated_at
         FROM users u
-        LEFT JOIN reports r ON u.id = r.assigned_to AND r.status != 'resolved'
         WHERE u.role = 'maintenance'
-        GROUP BY u.id
-        ORDER BY u.id
+        ORDER BY CASE WHEN COALESCE(u.availability, 'active') = 'active' THEN 0 ELSE 1 END, u.id
       `).all();
       return sendJson(res, 200, { staff });
     }
@@ -2935,7 +3046,7 @@ async function handleRequest(req, res) {
       if (user.role !== "admin" && user.role !== "super_admin") {
         return sendJson(res, 403, { detail: "Forbidden: Admin access required" });
       }
-      const users = db.prepare("SELECT id, name, email, role, department, created_at FROM users ORDER BY id").all();
+      const users = db.prepare("SELECT id, name, email, role, department, COALESCE(availability, 'active') as availability, availability_updated_at, created_at FROM users ORDER BY id").all();
       return sendJson(res, 200, { users });
     }
 

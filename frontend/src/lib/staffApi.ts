@@ -111,6 +111,41 @@ export async function apiGetStaffMe(): Promise<{ user: User }> {
   return await apiStaffFetch<{ user: User }>("/api/staff/auth/me");
 }
 
+export async function apiGetStaffProfile(): Promise<{ user: User }> {
+  return await apiStaffFetch<{ user: User }>("/api/staff/me");
+}
+
+export async function apiUpdateMyAvailability(
+  availability: "active" | "inactive"
+): Promise<{ success: boolean; user: User }> {
+  return await apiStaffFetch<{ success: boolean; user: User }>("/api/staff/me/availability", {
+    method: "PATCH",
+    body: JSON.stringify({ availability }),
+  });
+}
+
+export async function apiGetPublicConfig(): Promise<{ demo_mode: boolean }> {
+  return await apiStaffFetch<{ demo_mode: boolean }>("/api/config", {}, { authRequired: false });
+}
+
+export interface StaffReportDetailResponse {
+  report: Report;
+  resolution?: {
+    action: string;
+    remarks?: string | null;
+    resolved_by?: string | null;
+    resolved_by_id?: number | null;
+    resolved_at?: string | null;
+  } | null;
+  resolutions?: Resolution[];
+  updates?: any[];
+  history?: any[];
+}
+
+export async function apiGetStaffReportDetail(id: number): Promise<StaffReportDetailResponse> {
+  return await apiStaffFetch<StaffReportDetailResponse>(`/api/staff/reports/${id}`);
+}
+
 export async function apiGetReports(params: Record<string, any> = {}): Promise<ReportsResponse> {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([k, v]) => {

@@ -7,6 +7,8 @@ export interface User {
   role: UserRole | string;
   aud?: "reporter" | "staff" | string;
   department?: string;
+  availability?: "active" | "inactive" | string;
+  availability_updated_at?: string | null;
 }
 
 export interface Location {
@@ -58,6 +60,8 @@ export interface Report {
   location_type?: string | null;
   assigned_to?: number | null;
   assignee_name?: string | null;
+  assignee_availability?: "active" | "inactive" | string | null;
+  assigned_at?: string | null;
   similar_count?: number;
   similar_updates_count?: number;
   reporter_name?: string | null;
@@ -67,6 +71,15 @@ export interface Report {
   updated_at?: string | null;
   resolved_at?: string | null;
   resolution_action?: string | null;
+  resolution_remarks?: string | null;
+  resolved_by?: string | null;
+  resolution?: {
+    action: string;
+    remarks?: string | null;
+    resolved_by?: string | null;
+    resolved_by_id?: number | null;
+    resolved_at?: string | null;
+  } | null;
   timeline?: StatusHistoryItem[];
   updates?: ReportUpdateItem[];
   reporter?: User;
@@ -81,7 +94,9 @@ export interface Resolution {
   report_id: number;
   staff_id: number;
   action: string;
-  remarks?: string;
+  remarks?: string | null;
+  staff_name?: string | null;
+  staff_role?: string | null;
   created_at: string;
   staff?: User;
 }
@@ -136,8 +151,11 @@ export interface AuthResponse {
 export interface StaffMember {
   id: number;
   name?: string;
-  role: string;
-  assigned_count: number;
+  email?: string;
+  department?: string;
+  role?: string;
+  availability: "active" | "inactive" | string;
+  availability_updated_at?: string | null;
 }
 
 export interface TrendData {

@@ -18,7 +18,6 @@ export default function StaffNavbar() {
       ]
     : [
         { href: "/staff/work-orders", label: "Work Orders", icon: Wrench },
-        { href: "/heatmap", label: "Campus Heat Map", icon: Map },
       ];
 
   return (

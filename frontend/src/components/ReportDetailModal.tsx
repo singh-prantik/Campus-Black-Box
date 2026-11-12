@@ -147,7 +147,7 @@ export default function ReportDetailModal({
                         : "bg-surface border border-border text-muted"
                     }`}
                   >
-                    {idx < currentStepIdx ? "✓" : idx + 1}
+                    {idx < currentStepIdx || detailedReport.status === "resolved" ? "✓" : idx + 1}
                   </div>
                   <span
                     className={`text-xs font-medium truncate ${

@@ -429,7 +429,7 @@ function renderStaffTable(reports) {
           </span>
         </td>
         <td style="padding: 12px 16px;"><span class="chip ${statusClass}" style="font-size: 11px; text-transform: capitalize;">${r.status.replace("_", " ")}</span></td>
-        <td style="padding: 12px 16px; color: var(--muted);">${r.assignee_name || "Unassigned"}</td>
+        <td style="padding: 12px 16px; color: var(--muted);">${r.assignee_name ? `${escapeHtmlStaff(r.assignee_name)}${r.assignee_availability === "inactive" ? ' <span class="chip" style="font-size: 10px; background: #FEF3C7; color: #92400E; border-color: #FCD34D; margin-left: 4px;">Not active</span>' : ""}` : "Unassigned"}</td>
         <td style="padding: 12px 16px; color: var(--muted); font-size: 12px;">Reported by <strong>${reporterDisplay}</strong></td>
         <td style="padding: 12px 16px; text-align: center;" onclick="event.stopPropagation()">${photoBtnHtml}</td>
         <td style="padding: 12px 16px; text-align: right; white-space: nowrap;" onclick="event.stopPropagation()">${actionButtons}</td>
@@ -519,9 +519,16 @@ async function openAssignModal(ticketId, currentAssigneeId = null, currentStatus
     const res = await apiStaffFetch("/api/staff/staff");
     if (!res.ok) throw new Error();
     const data = await res.json();
-    select.innerHTML = (data.staff || []).map(s => `
-      <option value="${s.id}" ${Number(currentAssigneeId) === Number(s.id) ? "selected" : ""}>${s.name} (${s.assigned_count ?? 0} open)</option>
-    `).join("");
+    const sorted = [...(data.staff || [])].sort((a, b) => {
+      const aInact = a.availability === "inactive" ? 1 : 0;
+      const bInact = b.availability === "inactive" ? 1 : 0;
+      if (aInact !== bInact) return aInact - bInact;
+      return a.id - b.id;
+    });
+    select.innerHTML = sorted.map(s => {
+      const isInactive = s.availability === "inactive";
+      return `<option value="${s.id}" ${isInactive ? 'disabled style="color: #9CA3AF;"' : ""} ${!isInactive && Number(currentAssigneeId) === Number(s.id) ? "selected" : ""}>${escapeHtmlStaff(s.name)} - ${isInactive ? "Not active" : "Active"}</option>`;
+    }).join("");
   } catch (err) {
     select.innerHTML = `<option value="">Failed to load staff list</option>`;
   }
@@ -927,8 +934,79 @@ function handleStaffModalBackdropClick(event, modalId) {
 }
 
 // -------------------------------------------------------------
-// TECHNICIAN WORK ORDERS
+// TECHNICIAN WORK ORDERS & AVAILABILITY
 // -------------------------------------------------------------
+let techAvailabilityValue = "active";
+let techAvailabilityUpdating = false;
+let techOpenTicketsCount = 0;
+
+function renderTechAvailabilityUI() {
+  const wrap = document.getElementById("tech-availability-control");
+  const statusEl = document.getElementById("tech-availability-status-text");
+  const switchBtn = document.getElementById("tech-availability-switch");
+  const knob = document.getElementById("tech-availability-knob");
+  const noticeEl = document.getElementById("tech-availability-open-notice");
+
+  if (!wrap) return;
+  const isMaint = currentStaffUser && currentStaffUser.role === "maintenance";
+  wrap.style.display = isMaint ? "inline-flex" : "none";
+  if (!isMaint) {
+    if (noticeEl) noticeEl.style.display = "none";
+    return;
+  }
+
+  const isActive = techAvailabilityValue !== "inactive";
+  if (statusEl) {
+    statusEl.textContent = isActive ? "Active" : "Not active";
+    statusEl.style.color = isActive ? "#059669" : "#D97706";
+  }
+  if (switchBtn) {
+    switchBtn.setAttribute("aria-checked", isActive ? "true" : "false");
+    switchBtn.setAttribute("aria-label", `My availability: ${isActive ? "Active" : "Not active"}`);
+    switchBtn.style.background = isActive ? "#059669" : "#9CA3AF";
+    switchBtn.style.borderColor = isActive ? "#059669" : "#9CA3AF";
+  }
+  if (knob) {
+    knob.style.left = isActive ? "18px" : "2px";
+  }
+  if (noticeEl) {
+    if (!isActive && techOpenTicketsCount > 0) {
+      noticeEl.textContent = `You still have ${techOpenTicketsCount} open tickets. Admins will not assign you new ones while you are Not active.`;
+      noticeEl.style.display = "block";
+    } else {
+      noticeEl.style.display = "none";
+    }
+  }
+}
+
+async function toggleTechnicianAvailability() {
+  if (techAvailabilityUpdating || !currentStaffUser || currentStaffUser.role !== "maintenance") return;
+  const prev = techAvailabilityValue;
+  const next = prev === "active" ? "inactive" : "active";
+  techAvailabilityValue = next;
+  techAvailabilityUpdating = true;
+  renderTechAvailabilityUI();
+  try {
+    const res = await apiStaffFetch("/api/staff/me/availability", {
+      method: "PATCH",
+      body: JSON.stringify({ availability: next })
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || "Failed to update availability");
+    }
+    const data = await res.json();
+    techAvailabilityValue = (data.user && data.user.availability) || next;
+    renderTechAvailabilityUI();
+  } catch (err) {
+    techAvailabilityValue = prev;
+    renderTechAvailabilityUI();
+    alert((err && err.message) || "Failed to update availability");
+  } finally {
+    techAvailabilityUpdating = false;
+  }
+}
+
 async function fetchTechnicianWorkOrders() {
   const titleEl = document.getElementById("workorders-header-title");
   const subEl = document.getElementById("workorders-header-subtitle");
@@ -938,6 +1016,19 @@ async function fetchTechnicianWorkOrders() {
   if (subEl && currentStaffUser && currentStaffUser.name) {
     subEl.textContent = `Work orders assigned to ${currentStaffUser.name}`;
   }
+  if (currentStaffUser && currentStaffUser.role === "maintenance") {
+    apiStaffFetch("/api/staff/me")
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (d && d.user && d.user.availability) {
+          techAvailabilityValue = d.user.availability;
+          renderTechAvailabilityUI();
+        }
+      })
+      .catch(() => {});
+  } else {
+    renderTechAvailabilityUI();
+  }
   const container = document.getElementById("technician-workorders-list");
   container.innerHTML = `<div style="text-align: center; padding: 24px; color: var(--muted);">Loading your work orders...</div>`;
 
@@ -946,6 +1037,8 @@ async function fetchTechnicianWorkOrders() {
     if (!res.ok) return;
     const data = await res.json();
     const reports = data.reports || [];
+    techOpenTicketsCount = reports.filter(r => r.status !== "resolved").length;
+    renderTechAvailabilityUI();
 
     if (!reports.length) {
       container.innerHTML = `

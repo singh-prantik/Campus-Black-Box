@@ -243,13 +243,23 @@
     <!-- VIEW 3: TECHNICIAN WORK ORDERS (/staff/work-orders) -->
     <section id="view-staff-workorders" class="tab-pane" style="display: none;">
       <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 24px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 16px;">
           <div>
             <h2 id="workorders-header-title" style="font-size: 18px; font-weight: 700;">My Assigned Work Orders</h2>
             <p id="workorders-header-subtitle" style="font-size: 13px; color: var(--muted); margin-top: 4px;">Tickets allocated to your maintenance profile</p>
           </div>
-          <button class="btn btn-secondary btn-sm" onclick="fetchTechnicianWorkOrders()">Refresh</button>
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <div id="tech-availability-control" style="display: none; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-size: 12px;">
+              <span id="tech-availability-label" style="color: var(--muted); font-weight: 500;">My availability: <strong id="tech-availability-status-text" style="color: #059669;">Active</strong></span>
+              <button type="button" id="tech-availability-switch" role="switch" aria-checked="true" aria-label="My availability: Active" onclick="toggleTechnicianAvailability()" style="position: relative; width: 38px; height: 22px; border-radius: 9999px; border: 1px solid #059669; background: #059669; cursor: pointer; padding: 0; transition: background 0.15s;">
+                <span id="tech-availability-knob" style="position: absolute; top: 2px; left: 18px; width: 16px; height: 16px; border-radius: 9999px; background: #fff; transition: left 0.15s;"></span>
+              </button>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="fetchTechnicianWorkOrders()">Refresh</button>
+          </div>
         </div>
+
+        <div id="tech-availability-open-notice" role="status" style="display: none; padding: 10px 14px; border-radius: 8px; border: 1px solid #FCD34D; background: #FEF3C7; color: #92400E; font-size: 12px; font-weight: 500; margin-bottom: 14px;"></div>
 
         <div id="technician-workorders-list" style="display: grid; gap: 14px;">
           <div style="text-align: center; padding: 32px; color: var(--muted);">Loading assigned work orders...</div>
@@ -269,6 +279,7 @@
         <select id="assign-technician-select" class="form-select" style="width: 100%;">
           <!-- Populated from GET /api/staff/staff -->
         </select>
+        <p style="font-size: 11px; color: var(--muted); margin-top: 6px;">Not active technicians cannot receive new tickets</p>
       </div>
 
       <div style="display: flex; justify-content: flex-end; gap: 8px;">
