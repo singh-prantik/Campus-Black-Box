@@ -74,11 +74,21 @@ async function apiStaffFetch(url, options = {}) {
   }
 
   const res = await fetch(url, { ...options, headers });
-  if (res.status === 401 || res.status === 403) {
+  if (res.status === 401) {
     clearStaffToken();
     currentStaffUser = null;
     showStaffLoginView();
     throw new Error("Staff session invalid or expired. Please sign in again.");
+  }
+  if (res.status === 403) {
+    const errBody = await res.clone().json().catch(() => ({}));
+    const msg = String(errBody.detail || "");
+    if (/staff portal/i.test(msg)) {
+      clearStaffToken();
+      currentStaffUser = null;
+      showStaffLoginView();
+      throw new Error("Staff session invalid or expired. Please sign in again.");
+    }
   }
   return res;
 }
@@ -116,16 +126,23 @@ async function checkStaffAuth() {
 
 function updateStaffHeaderUI() {
   const navTabs = document.getElementById("staff-nav-tabs");
+  const btnAdmin = document.getElementById("tab-btn-admin");
+  const btnHeatmap = document.getElementById("tab-btn-heatmap");
+  const btnWorkorders = document.getElementById("tab-btn-workorders");
   const userBadge = document.getElementById("staff-user-badge");
   const signinBtn = document.getElementById("staff-signin-btn");
   const rolePill = document.getElementById("staff-role-pill");
 
   if (currentStaffUser) {
+    const isAdminUser = currentStaffUser.role === "admin" || currentStaffUser.role === "super_admin";
     if (navTabs) navTabs.style.display = "flex";
+    if (btnAdmin) btnAdmin.style.display = isAdminUser ? "inline-flex" : "none";
+    if (btnHeatmap) btnHeatmap.style.display = isAdminUser ? "inline-flex" : "none";
+    if (btnWorkorders) btnWorkorders.style.display = "inline-flex";
     if (userBadge) userBadge.style.display = "inline-flex";
     if (signinBtn) signinBtn.style.display = "none";
     if (rolePill) {
-      rolePill.textContent = `${currentStaffUser.role}: ${currentStaffUser.name || currentStaffUser.email}`;
+      rolePill.textContent = currentStaffUser.name || currentStaffUser.email;
     }
   } else {
     if (navTabs) navTabs.style.display = "none";
@@ -206,6 +223,9 @@ function fillStaffCredentials(role) {
 // TAB NAVIGATION
 // -------------------------------------------------------------
 function switchStaffTab(tabName) {
+  if (currentStaffUser && currentStaffUser.role === "maintenance" && tabName !== "workorders") {
+    tabName = "workorders";
+  }
   currentTab = tabName;
   document.getElementById("view-staff-login").style.display = "none";
   document.getElementById("view-staff-admin").style.display = tabName === "admin" ? "block" : "none";
@@ -366,25 +386,31 @@ function renderStaffTable(reports) {
     if (r.status === "pending") {
       actionButtons = `
         ${isAdmin ? `<button class="btn btn-secondary btn-sm" style="margin-right: 4px;" onclick="openPriorityModal(${r.id}, '${r.priority}')" title="Override priority">Prio</button>` : ""}
-        <button class="btn btn-primary btn-sm" onclick="openAssignModal(${r.id})">Assign</button>
+        <button class="btn btn-primary btn-sm" onclick="openAssignModal(${r.id}, ${r.assigned_to || "null"}, '${r.status}')">Assign</button>
       `;
     } else if (r.status === "assigned") {
       actionButtons = `
         ${isAdmin ? `<button class="btn btn-secondary btn-sm" style="margin-right: 4px;" onclick="openPriorityModal(${r.id}, '${r.priority}')" title="Override priority">Prio</button>` : ""}
         <button class="btn btn-secondary btn-sm" style="margin-right: 4px;" onclick="startWorkOnTicket(${r.id})">Start Work</button>
-        <button class="btn btn-secondary btn-sm" onclick="openAssignModal(${r.id})">Reassign</button>
+        ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="openAssignModal(${r.id}, ${r.assigned_to || "null"}, '${r.status}')">Reassign</button>` : ""}
       `;
     } else if (r.status === "in_progress") {
       actionButtons = `
         ${isAdmin ? `<button class="btn btn-secondary btn-sm" style="margin-right: 4px;" onclick="openPriorityModal(${r.id}, '${r.priority}')" title="Override priority">Prio</button>` : ""}
-        <button class="btn btn-primary btn-sm" style="background: #10B981; border-color: #10B981;" onclick="openResolveModal(${r.id})">Resolve</button>
+        <button class="btn btn-primary btn-sm" style="background: #10B981; border-color: #10B981; margin-right: 4px;" onclick="openResolveModal(${r.id})">Resolve</button>
+        ${isAdmin ? `<button class="btn btn-secondary btn-sm" onclick="openAssignModal(${r.id}, ${r.assigned_to || "null"}, '${r.status}')">Reassign</button>` : ""}
       `;
     } else if (r.status === "resolved") {
-      actionButtons = `<span style="font-size: 11px; color: var(--muted); font-weight: 500;">Closed</span>`;
+      actionButtons = `
+        <button type="button" class="btn btn-secondary btn-sm" aria-label="View resolution notes" title="View resolution notes" onclick="openStaffDetailModal(${r.id}, true)" style="margin-right: 4px;">
+          <i data-lucide="file-text" style="width: 14px; height: 14px;"></i>
+        </button>
+        <span style="font-size: 11px; color: var(--muted); font-weight: 500;">Closed</span>
+      `;
     }
 
     return `
-      <tr style="border-bottom: 1px solid var(--border);">
+      <tr style="border-bottom: 1px solid var(--border); cursor: pointer;" onclick="openStaffDetailModal(${r.id})">
         <td style="padding: 12px 16px; font-weight: 600;">#${r.id}</td>
         <td style="padding: 12px 16px; color: var(--muted); font-size: 11px;" title="${fullTs}">
           <div style="color: var(--text); font-weight: 600;">${relTs || fullTs}</div>
@@ -405,8 +431,8 @@ function renderStaffTable(reports) {
         <td style="padding: 12px 16px;"><span class="chip ${statusClass}" style="font-size: 11px; text-transform: capitalize;">${r.status.replace("_", " ")}</span></td>
         <td style="padding: 12px 16px; color: var(--muted);">${r.assignee_name || "Unassigned"}</td>
         <td style="padding: 12px 16px; color: var(--muted); font-size: 12px;">Reported by <strong>${reporterDisplay}</strong></td>
-        <td style="padding: 12px 16px; text-align: center;">${photoBtnHtml}</td>
-        <td style="padding: 12px 16px; text-align: right;">${actionButtons}</td>
+        <td style="padding: 12px 16px; text-align: center;" onclick="event.stopPropagation()">${photoBtnHtml}</td>
+        <td style="padding: 12px 16px; text-align: right; white-space: nowrap;" onclick="event.stopPropagation()">${actionButtons}</td>
       </tr>
     `;
   }).join("");
@@ -480,8 +506,10 @@ async function exportCategoryCorrectionsCsv() {
 // -------------------------------------------------------------
 // ASSIGN TECHNICIAN MODAL (AC2.4)
 // -------------------------------------------------------------
-async function openAssignModal(ticketId) {
+let activeAssignTicketStatus = "pending";
+async function openAssignModal(ticketId, currentAssigneeId = null, currentStatus = "pending") {
   activeTicketIdForModal = ticketId;
+  activeAssignTicketStatus = currentStatus || "pending";
   document.getElementById("assign-modal-ticket-id").textContent = `#${ticketId}`;
   const select = document.getElementById("assign-technician-select");
   select.innerHTML = `<option value="">Loading maintenance staff...</option>`;
@@ -492,7 +520,7 @@ async function openAssignModal(ticketId) {
     if (!res.ok) throw new Error();
     const data = await res.json();
     select.innerHTML = (data.staff || []).map(s => `
-      <option value="${s.id}">${s.name} (${s.email})</option>
+      <option value="${s.id}" ${Number(currentAssigneeId) === Number(s.id) ? "selected" : ""}>${s.name} (${s.assigned_count ?? 0} open)</option>
     `).join("");
   } catch (err) {
     select.innerHTML = `<option value="">Failed to load staff list</option>`;
@@ -513,12 +541,12 @@ async function submitTechnicianAssignment() {
   }
 
   try {
+    const payload = activeAssignTicketStatus === "pending"
+      ? { assigned_to: techId, status: "assigned" }
+      : { assigned_to: techId };
     const res = await apiStaffFetch(`/api/staff/reports/${activeTicketIdForModal}`, {
       method: "PUT",
-      body: JSON.stringify({
-        assigned_to: techId,
-        status: "assigned"
-      })
+      body: JSON.stringify(payload)
     });
 
     if (!res.ok) {
@@ -740,6 +768,153 @@ function closeStaffPhotoLightbox() {
   }
 }
 
+function escapeHtmlStaff(str) {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function closeStaffDetailModal() {
+  const modal = document.getElementById("modal-staff-detail");
+  if (modal) modal.style.display = "none";
+}
+
+async function openStaffDetailModal(reportId, focusResolution = false) {
+  const modal = document.getElementById("modal-staff-detail");
+  const badgesEl = document.getElementById("detail-modal-badges");
+  const titleEl = document.getElementById("detail-modal-title");
+  const bodyEl = document.getElementById("detail-modal-body");
+  if (!modal || !bodyEl) return;
+
+  titleEl.textContent = `Incident #${reportId}`;
+  badgesEl.innerHTML = "";
+  bodyEl.innerHTML = `<span style="font-size: 12px; color: var(--muted);">Loading ticket details...</span>`;
+  modal.style.display = "flex";
+
+  try {
+    const res = await apiStaffFetch(`/api/staff/reports/${reportId}`);
+    if (!res.ok) {
+      bodyEl.innerHTML = `<span style="font-size: 12px; color: var(--prio-critical-text);">Failed to load ticket details.</span>`;
+      return;
+    }
+    const data = await res.json();
+    const r = data.report;
+    const resolution = data.resolution || r.resolution || null;
+    const steps = ["pending", "assigned", "in_progress", "resolved"];
+    const stepLabels = { pending: "Pending", assigned: "Assigned", in_progress: "In progress", resolved: "Resolved" };
+    const currentIdx = steps.indexOf(r.status);
+
+    badgesEl.innerHTML = `
+      <span class="chip" style="font-size: 11px;">#${r.id}</span>
+      <span class="chip status-${r.status}" style="font-size: 11px; text-transform: capitalize;">${r.status.replace("_", " ")}</span>
+      <span class="chip prio-${(r.priority || "medium").toLowerCase()}" style="font-size: 11px;">${r.priority}</span>
+      <span class="chip" style="font-size: 11px;">${escapeHtmlStaff(r.category)}</span>
+    `;
+    titleEl.textContent = escapeHtmlStaff(r.description);
+
+    const roleLabel = formatStaffRoleLabel(r.reporter_role);
+    const reporterText = r.reporter_name ? `${escapeHtmlStaff(r.reporter_name)} (${roleLabel})` : roleLabel;
+    const reportedFull = window.CBBTime ? window.CBBTime.formatFullTimestamp(r.created_at) : r.created_at;
+    const assignedAtFull = r.assigned_at && window.CBBTime ? window.CBBTime.formatFullTimestamp(r.assigned_at) : (r.assigned_at || "—");
+
+    const stepperHtml = steps.map((s, idx) => {
+      const done = idx <= currentIdx;
+      const isChecked = idx < currentIdx || r.status === "resolved";
+      return `
+        <div style="display: flex; align-items: center; gap: 6px; flex: 1; min-width: 90px;">
+          <div style="width: 22px; height: 22px; border-radius: 9999px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; ${done ? "background: var(--accent); color: #fff;" : "background: var(--surface); border: 1px solid var(--border); color: var(--muted);"}">
+            ${isChecked ? "✓" : idx + 1}
+          </div>
+          <span style="font-size: 12px; font-weight: 500; color: ${done ? "var(--text)" : "var(--muted)"};">${stepLabels[s]}</span>
+        </div>
+      `;
+    }).join("");
+
+    let resolutionSectionHtml = "";
+    if (r.status === "resolved" || resolution) {
+      const resolvedAtFull = (resolution && resolution.resolved_at) || r.resolved_at
+        ? (window.CBBTime ? window.CBBTime.formatFullTimestamp((resolution && resolution.resolved_at) || r.resolved_at) : ((resolution && resolution.resolved_at) || r.resolved_at))
+        : "—";
+      const remarksVal = resolution && resolution.remarks && String(resolution.remarks).trim()
+        ? escapeHtmlStaff(resolution.remarks)
+        : "No remarks added";
+      resolutionSectionHtml = `
+        <div id="staff-detail-resolution-section" style="background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px;">
+          <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--muted); margin-bottom: 10px;">Resolution</div>
+          <div style="display: grid; gap: 10px; font-size: 12px;">
+            <div>
+              <div style="font-size: 11px; color: var(--muted); margin-bottom: 2px;">Action taken</div>
+              <div style="font-weight: 600;">${escapeHtmlStaff((resolution && resolution.action) || r.resolution_action || "Completed")}</div>
+            </div>
+            <div>
+              <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 2px;">
+                <span style="font-size: 11px; color: var(--muted);">Internal remarks</span>
+                <span class="chip" style="font-size: 10px; background: #FEF3C7; color: #92400E; border-color: #FCD34D;">Internal - staff only</span>
+              </div>
+              <div style="padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; ${resolution && resolution.remarks ? "" : "color: var(--muted); font-style: italic;"}">${remarksVal}</div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px;">
+              <div>
+                <div style="font-size: 11px; color: var(--muted);">Resolved by</div>
+                <div style="font-weight: 600;">${escapeHtmlStaff((resolution && resolution.resolved_by) || r.resolved_by || r.assignee_name || "Staff")}</div>
+              </div>
+              <div>
+                <div style="font-size: 11px; color: var(--muted);">Resolved at</div>
+                <div style="font-weight: 600;" title="${resolvedAtFull}">${resolvedAtFull}</div>
+              </div>
+              <div>
+                <div style="font-size: 11px; color: var(--muted);">Assigned to</div>
+                <div style="font-weight: 600;">${escapeHtmlStaff(r.assignee_name || "Unassigned")}</div>
+              </div>
+              <div>
+                <div style="font-size: 11px; color: var(--muted);">Assigned at</div>
+                <div style="font-weight: 600;" title="${assignedAtFull}">${assignedAtFull}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    bodyEl.innerHTML = `
+      <div style="background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px;">
+        <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--muted); margin-bottom: 8px;">Lifecycle Progress</div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">${stepperHtml}</div>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; font-size: 12px;">
+        <div style="background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px;">
+          <div style="font-size: 11px; color: var(--muted);">Location</div>
+          <div style="font-weight: 600;">${formatStaffLocation(r)}</div>
+        </div>
+        <div style="background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px;">
+          <div style="font-size: 11px; color: var(--muted);">Reported By</div>
+          <div style="font-weight: 600;">${reporterText}</div>
+        </div>
+        <div style="background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px;">
+          <div style="font-size: 11px; color: var(--muted);">Reported Time</div>
+          <div style="font-weight: 600;">${reportedFull}</div>
+        </div>
+        <div style="background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px;">
+          <div style="font-size: 11px; color: var(--muted);">Assigned To</div>
+          <div style="font-weight: 600;">${escapeHtmlStaff(r.assignee_name || "Unassigned")}</div>
+          <div style="font-size: 11px; color: var(--muted);">Assigned: ${assignedAtFull}</div>
+        </div>
+      </div>
+      ${r.has_photo ? `<div><button type="button" class="btn btn-secondary btn-sm" aria-label="View photo proof" onclick="openStaffPhotoLightbox(${r.id})"><i data-lucide="camera" style="width: 14px; height: 14px;"></i> View photo proof</button></div>` : ""}
+      ${resolutionSectionHtml}
+    `;
+    refreshIcons();
+    if (focusResolution) {
+      const sec = document.getElementById("staff-detail-resolution-section");
+      if (sec) sec.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  } catch {
+    bodyEl.innerHTML = `<span style="font-size: 12px; color: var(--prio-critical-text);">Failed to load ticket details.</span>`;
+  }
+}
+
 function handleStaffModalBackdropClick(event, modalId) {
   if (event.target && event.target.id === modalId) {
     if (modalId === "modal-assign") closeAssignModal();
@@ -747,6 +922,7 @@ function handleStaffModalBackdropClick(event, modalId) {
     if (modalId === "modal-priority") closePriorityModal();
     if (modalId === "modal-block-drilldown") closeBlockDrilldownModal();
     if (modalId === "modal-photo-lightbox") closeStaffPhotoLightbox();
+    if (modalId === "modal-staff-detail") closeStaffDetailModal();
   }
 }
 
@@ -754,6 +930,14 @@ function handleStaffModalBackdropClick(event, modalId) {
 // TECHNICIAN WORK ORDERS
 // -------------------------------------------------------------
 async function fetchTechnicianWorkOrders() {
+  const titleEl = document.getElementById("workorders-header-title");
+  const subEl = document.getElementById("workorders-header-subtitle");
+  if (titleEl && currentStaffUser && currentStaffUser.name) {
+    titleEl.textContent = `${currentStaffUser.name} — Work Orders`;
+  }
+  if (subEl && currentStaffUser && currentStaffUser.name) {
+    subEl.textContent = `Work orders assigned to ${currentStaffUser.name}`;
+  }
   const container = document.getElementById("technician-workorders-list");
   container.innerHTML = `<div style="text-align: center; padding: 24px; color: var(--muted);">Loading your work orders...</div>`;
 
@@ -789,7 +973,7 @@ async function fetchTechnicianWorkOrders() {
       } else if (r.status === "in_progress") {
         actionHtml = `<button class="btn btn-primary btn-sm" style="background: #10B981; border-color: #10B981;" onclick="openResolveModal(${r.id})">Complete &amp; Resolve</button>`;
       } else if (r.status === "resolved") {
-        actionHtml = `<span class="chip status-resolved" style="font-size: 11px;">Completed</span>`;
+        actionHtml = `<button type="button" class="btn btn-secondary btn-sm" aria-label="View resolution notes" onclick="openStaffDetailModal(${r.id}, true)">View Resolution</button> <span class="chip status-resolved" style="font-size: 11px;">Completed</span>`;
       }
 
       return `
@@ -866,6 +1050,7 @@ async function initStaffApp() {
       closePriorityModal();
       closeBlockDrilldownModal();
       closeStaffPhotoLightbox();
+      closeStaffDetailModal();
     }
   });
 

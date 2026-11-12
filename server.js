@@ -889,8 +889,8 @@ function seedData(forceReset = false) {
 
   // Seed Users
   const users = [
-    { id: 1, name: "Student", email: "student@campus.edu", role: "student", dept: "Computer Science" },
-    { id: 2, name: "Faculty", email: "faculty@campus.edu", role: "faculty", dept: "Engineering" },
+    { id: 1, name: "Alex", email: "student@campus.edu", role: "student", dept: "Computer Science" },
+    { id: 2, name: "Prof. Roy", email: "faculty@campus.edu", role: "faculty", dept: "Engineering" },
     { id: 3, name: "Technician 1", email: "tech1@campus.edu", role: "maintenance", dept: "Electrical & Facilities" },
     { id: 4, name: "Technician 2", email: "tech2@campus.edu", role: "maintenance", dept: "Hardware & IT Support" },
     { id: 5, name: "Admin", email: "admin@campus.edu", role: "admin", dept: "Campus Operations" },
@@ -1014,7 +1014,9 @@ function seedData(forceReset = false) {
       assignedTo: 3, // Technician 1
       photo: null,
       ageHours: 24,
-      resolvedAt: isoHoursAgo(3)
+      resolvedAt: isoHoursAgo(3),
+      resolveAction: "Replaced damaged chair structural backrest and verified load stability",
+      resolveRemarks: "Tested safe for student use"
     },
     {
       id: 7,
@@ -1043,6 +1045,22 @@ function seedData(forceReset = false) {
       photo: null,
       ageHours: 7,
       resolvedAt: null
+    },
+    {
+      id: 9,
+      userId: 2, // Prof. Roy
+      locId: 3,  // Block 1 · Room 102
+      desc: "Lab workbench power strip sparking when switched on",
+      cat: "Electrical",
+      prio: "high",
+      safetyRule: null,
+      status: "resolved",
+      assignedTo: 4, // Technician 2
+      photo: null,
+      ageHours: 20,
+      resolvedAt: isoHoursAgo(4),
+      resolveAction: "Replaced overloaded workbench PDU and tightened ground terminal",
+      resolveRemarks: "Fuse changed and load-tested at 15A; safe for lab sessions"
     }
   ];
 
@@ -1129,15 +1147,17 @@ function seedData(forceReset = false) {
 
     if (r.status === "resolved") {
       const resolvedIso = r.resolvedAt || isoHoursAgo(3);
+      const resAction = r.resolveAction || "Replaced damaged chair structural backrest and verified load stability";
+      const resRemarks = r.resolveRemarks !== undefined ? r.resolveRemarks : "Tested safe for student use";
       insertResolution.run(
         r.id,
         r.assignedTo,
-        "Replaced damaged chair structural backrest and verified load stability",
-        "Tested safe for student use",
+        resAction,
+        resRemarks,
         resolvedIso
       );
       insertStatusHistory.run(r.id, "in_progress", "resolved", r.assignedTo, resolvedIso);
-      insertNotification.run(r.userId, r.id, "Your incident #6 has been resolved: Replaced damaged chair structural backrest", isoHoursAgo(2), resolvedIso);
+      insertNotification.run(r.userId, r.id, `Your incident #${r.id} has been resolved: ${resAction}`, isoHoursAgo(2), resolvedIso);
     }
   }
 
@@ -1169,6 +1189,8 @@ try {
   if (existingUsers < 6 || existingLocations < 9 || existingReports === 0) {
     seedData(true);
   }
+  db.prepare("UPDATE users SET name = 'Alex' WHERE id = 1 AND name = 'Student'").run();
+  db.prepare("UPDATE users SET name = 'Prof. Roy' WHERE id = 2 AND name = 'Faculty'").run();
   migrateLegacyTimestampsToIsoUtc();
   const seededPhotoRow = db.prepare("SELECT id FROM reports WHERE photo_path = ? OR photo_url = ? LIMIT 1").get("/api/photos/seed_projector_evidence.png", "/api/photos/seed_projector_evidence.png");
   if (seededPhotoRow) {
@@ -1260,12 +1282,50 @@ function buildReporterReportPayload(row, extras = {}) {
   };
 }
 
+function getStaffReportResolutionAndAssignMeta(reportId, status, resolvedAt) {
+  const assignRow = db.prepare(`
+    SELECT changed_at
+    FROM status_history
+    WHERE report_id = ?
+      AND (to_status = 'assigned' OR (from_status = to_status AND to_status IN ('assigned', 'in_progress')))
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(reportId);
+
+  let resolution = null;
+  if (status === "resolved") {
+    const resRow = db.prepare(`
+      SELECT res.action, res.remarks, res.created_at, res.staff_id, u.name as resolved_by_name
+      FROM resolutions res
+      LEFT JOIN users u ON res.staff_id = u.id
+      WHERE res.report_id = ?
+      ORDER BY res.id DESC
+      LIMIT 1
+    `).get(reportId);
+    if (resRow) {
+      resolution = {
+        action: resRow.action || "",
+        remarks: resRow.remarks ?? null,
+        resolved_by: resRow.resolved_by_name || null,
+        resolved_by_id: resRow.staff_id ?? null,
+        resolved_at: resolvedAt || resRow.created_at || null
+      };
+    }
+  }
+
+  return {
+    assigned_at: assignRow ? assignRow.changed_at : null,
+    resolution
+  };
+}
+
 function buildStaffReportPayload(row) {
   if (!row) return null;
   const hasPhoto = Boolean(row.photo_path || row.photo_url);
   const block = row.block ?? null;
   const room = row.room ?? null;
   const locationType = row.location_type ?? null;
+  const meta = getStaffReportResolutionAndAssignMeta(row.id, row.status, row.resolved_at);
   const payload = {
     id: row.id,
     user_id: row.user_id,
@@ -1278,6 +1338,11 @@ function buildStaffReportPayload(row) {
     has_photo: hasPhoto,
     assigned_to: row.assigned_to ?? null,
     assignee_name: row.assignee_name ?? null,
+    assigned_at: meta.assigned_at,
+    resolution: meta.resolution,
+    resolution_action: meta.resolution ? meta.resolution.action : null,
+    resolution_remarks: meta.resolution ? meta.resolution.remarks : null,
+    resolved_by: meta.resolution ? meta.resolution.resolved_by : null,
     priority_overridden_by: row.priority_overridden_by ?? null,
     priority_override_reason: row.priority_override_reason ?? null,
     safety_rule_matched: row.safety_rule_matched ?? null,
@@ -2153,7 +2218,67 @@ async function handleRequest(req, res) {
         ORDER BY ru.created_at ASC
       `).all(reportId);
 
-      return sendJson(res, 200, { report: buildStaffReportPayload(rawReport), resolutions, updates });
+      const history = db.prepare(`
+        SELECT sh.id, sh.report_id, sh.from_status, sh.to_status, sh.changed_by, sh.changed_at,
+               u.name as changed_by_name, u.role as changed_by_role
+        FROM status_history sh
+        LEFT JOIN users u ON sh.changed_by = u.id
+        WHERE sh.report_id = ?
+        ORDER BY sh.changed_at ASC, sh.id ASC
+      `).all(reportId);
+
+      const staffPayload = buildStaffReportPayload(rawReport);
+      return sendJson(res, 200, {
+        report: staffPayload,
+        resolution: staffPayload.resolution,
+        resolutions,
+        updates,
+        history
+      });
+    }
+
+    // 2b. Staff: Report Status History (GET /api/staff/reports/:id/history)
+    const staffRepHist = pathname.match(/^\/api\/staff\/reports\/(\d+)\/history$/);
+    if (staffRepHist && method === "GET") {
+      const reportId = Number(staffRepHist[1]);
+      const report = db.prepare("SELECT id, assigned_to FROM reports WHERE id = ?").get(reportId);
+      if (!report) return sendJson(res, 404, { detail: "Report not found" });
+      if (user.role === "maintenance" && report.assigned_to !== user.id) {
+        return sendJson(res, 403, { detail: "Forbidden: You can only view history for tickets assigned to you" });
+      }
+      const history = db.prepare(`
+        SELECT sh.id, sh.report_id, sh.from_status, sh.to_status, sh.changed_by, sh.changed_at,
+               u.name as changed_by_name, u.role as changed_by_role
+        FROM status_history sh
+        LEFT JOIN users u ON sh.changed_by = u.id
+        WHERE sh.report_id = ?
+        ORDER BY sh.changed_at ASC, sh.id ASC
+      `).all(reportId);
+      return sendJson(res, 200, { report_id: reportId, history });
+    }
+
+    // 2c. Staff: Notifications (GET /api/staff/notifications) - Technician scoped strictly to assigned tickets
+    if (pathname === "/api/staff/notifications" && method === "GET") {
+      const notifications = user.role === "maintenance"
+        ? db.prepare(`
+            SELECT n.id, n.report_id, n.message, n.read_at, n.created_at
+            FROM notifications n
+            JOIN reports r ON n.report_id = r.id
+            WHERE n.user_id = ? AND r.assigned_to = ?
+            ORDER BY n.created_at DESC, n.id DESC
+            LIMIT 50
+          `).all(user.id, user.id)
+        : db.prepare(`
+            SELECT id, report_id, message, read_at, created_at
+            FROM notifications
+            WHERE user_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 50
+          `).all(user.id);
+      return sendJson(res, 200, {
+        notifications,
+        unread_count: notifications.filter(n => !n.read_at).length
+      });
     }
 
     // 3. Staff: Priority Override (PATCH /api/staff/reports/:id/priority) (FR-18, FR-19, Goal 3b)
@@ -2223,6 +2348,9 @@ async function handleRequest(req, res) {
 
     // 5. Staff: Category Corrections Export (GET /api/staff/corrections/export) (FR-17, AC6.6)
     if (pathname === "/api/staff/corrections/export" && method === "GET") {
+      if (user.role !== "admin" && user.role !== "super_admin") {
+        return sendJson(res, 403, { detail: "Forbidden: Administrator access required" });
+      }
       const rows = db.prepare(`
         SELECT c.id, c.report_id, c.suggested_category, c.final_category,
                u.name as corrected_by_name, c.role, c.created_at
@@ -2246,6 +2374,9 @@ async function handleRequest(req, res) {
 
     // 6. Staff: All-Blocks Heat Map Summary (GET /api/staff/blocks/summary?window=7d|30d|all)
     if (pathname === "/api/staff/blocks/summary" && method === "GET") {
+      if (user.role !== "admin" && user.role !== "super_admin") {
+        return sendJson(res, 403, { detail: "Forbidden: Administrator access required" });
+      }
       const windowParam = parsedUrl.searchParams.get("window") || "all";
       if (!["7d", "30d", "all"].includes(windowParam)) {
         return sendJson(res, 400, { detail: `Invalid window parameter '${windowParam}'. Allowed: 7d, 30d, all` });
@@ -2377,6 +2508,9 @@ async function handleRequest(req, res) {
     // 6b. Staff: Single Block Heat Map Drill-down Summary (GET /api/staff/blocks/:block/summary) (FR-15, FR-25, AC6.9)
     const blockMatch = pathname.match(/^\/api\/staff\/blocks\/([^\/]+)\/summary$/);
     if (blockMatch && method === "GET") {
+      if (user.role !== "admin" && user.role !== "super_admin") {
+        return sendJson(res, 403, { detail: "Forbidden: Administrator access required" });
+      }
       const windowParam = parsedUrl.searchParams.get("window") || "all";
       if (!["7d", "30d", "all"].includes(windowParam)) {
         return sendJson(res, 400, { detail: `Invalid window parameter '${windowParam}'. Allowed: 7d, 30d, all` });
@@ -2453,7 +2587,50 @@ async function handleRequest(req, res) {
       });
     }
 
-    // 7. Staff: Update / Transition Ticket (PUT/PATCH /api/staff/reports/:id)
+    // 7. Staff: Start Work on Ticket (POST/PATCH /api/staff/reports/:id/start)
+    const staffRepStart = pathname.match(/^\/api\/staff\/reports\/(\d+)\/start$/);
+    if (staffRepStart && (method === "POST" || method === "PATCH")) {
+      const reportId = Number(staffRepStart[1]);
+      const existing = db.prepare("SELECT * FROM reports WHERE id = ?").get(reportId);
+      if (!existing) return sendJson(res, 404, { detail: "Report not found" });
+
+      const isAssignee = user.role === "maintenance" && user.id === existing.assigned_to;
+      const isAdmin = user.role === "admin" || user.role === "super_admin";
+      if (!isAssignee && !isAdmin) {
+        return sendJson(res, 403, { detail: "Forbidden: Only the assigned technician or an admin can start work on this ticket" });
+      }
+      if (existing.status !== "assigned") {
+        return sendJson(res, 400, { detail: `Cannot start work from status '${existing.status}'. Ticket must be Assigned first.` });
+      }
+
+      const body = await parseRequestBody(req);
+      const remarks = (body.remarks || "").trim();
+      if (remarks.length > 1000) {
+        return sendJson(res, 400, { detail: "Remarks must not exceed 1000 characters" });
+      }
+
+      const nowIso = toIsoUtc();
+      db.prepare(`
+        INSERT INTO resolutions (report_id, staff_id, action, remarks, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(reportId, user.id, "Started work on incident", remarks || null, nowIso);
+
+      db.prepare(`
+        INSERT INTO status_history (report_id, from_status, to_status, changed_by, changed_at)
+        VALUES (?, 'assigned', 'in_progress', ?, ?)
+      `).run(reportId, user.id, nowIso);
+
+      db.prepare(`
+        INSERT INTO notifications (user_id, report_id, message, created_at)
+        VALUES (?, ?, ?, ?)
+      `).run(existing.user_id, reportId, `Your incident #${reportId} status updated to In progress`, nowIso);
+
+      db.prepare("UPDATE reports SET status = 'in_progress', updated_at = ? WHERE id = ?").run(nowIso, reportId);
+      const updated = fetchSanitizedStaffReportById(reportId);
+      return sendJson(res, 200, { success: true, report: updated });
+    }
+
+    // 7b. Staff: Update / Transition Ticket (PUT/PATCH /api/staff/reports/:id)
     const staffRepUpdate = pathname.match(/^\/api\/staff\/reports\/(\d+)$/);
     if (staffRepUpdate && (method === "PUT" || method === "PATCH")) {
       const reportId = Number(staffRepUpdate[1]);
@@ -2461,6 +2638,10 @@ async function handleRequest(req, res) {
 
       const existing = db.prepare("SELECT * FROM reports WHERE id = ?").get(reportId);
       if (!existing) return sendJson(res, 404, { detail: "Report not found" });
+
+      if (user.role === "maintenance" && existing.assigned_to !== user.id) {
+        return sendJson(res, 403, { detail: "Forbidden: You can only act on tickets assigned to you" });
+      }
 
       const currentStatus = existing.status;
       const requestedStatus = body.status !== undefined ? body.status : currentStatus;
@@ -2504,6 +2685,11 @@ async function handleRequest(req, res) {
             INSERT INTO notifications (user_id, report_id, message, created_at)
             VALUES (?, ?, ?, ?)
           `).run(existing.user_id, reportId, `Your incident #${reportId} status updated to Assigned`, nowIso);
+
+          db.prepare(`
+            INSERT INTO notifications (user_id, report_id, message, created_at)
+            VALUES (?, ?, ?, ?)
+          `).run(staffUser.id, reportId, `Work order #${reportId} has been assigned to you`, nowIso);
         } else if (currentStatus === "assigned" && requestedStatus === "in_progress") {
           const isAssignee = user.role === "maintenance" && user.id === existing.assigned_to;
           const isAdmin = user.role === "admin" || user.role === "super_admin";
@@ -2542,6 +2728,16 @@ async function handleRequest(req, res) {
             INSERT INTO resolutions (report_id, staff_id, action, remarks, created_at)
             VALUES (?, ?, ?, ?, ?)
           `).run(reportId, user.id, `Reassigned ticket to technician ${staffUser.name} (#${staffUser.id})`, remarks || null, nowIso);
+
+          db.prepare(`
+            INSERT INTO status_history (report_id, from_status, to_status, changed_by, changed_at)
+            VALUES (?, ?, ?, ?, ?)
+          `).run(reportId, currentStatus, currentStatus, user.id, nowIso);
+
+          db.prepare(`
+            INSERT INTO notifications (user_id, report_id, message, created_at)
+            VALUES (?, ?, ?, ?)
+          `).run(staffUser.id, reportId, `Work order #${reportId} has been reassigned to you`, nowIso);
         }
       }
 
@@ -2572,16 +2768,16 @@ async function handleRequest(req, res) {
       const existing = db.prepare("SELECT * FROM reports WHERE id = ?").get(reportId);
       if (!existing) return sendJson(res, 404, { detail: "Report not found" });
 
-      if (existing.status === "pending") {
-        return sendJson(res, 400, {
-          detail: "Cannot resolve a Pending ticket. Tickets must transition: Pending -> Assigned -> In Progress -> Resolved."
-        });
-      }
-
       const isAssignee = user.role === "maintenance" && user.id === existing.assigned_to;
       const isAdmin = user.role === "admin" || user.role === "super_admin";
       if (!isAssignee && !isAdmin) {
         return sendJson(res, 403, { detail: "Forbidden: You are not authorized to resolve this ticket" });
+      }
+
+      if (existing.status === "pending") {
+        return sendJson(res, 400, {
+          detail: "Cannot resolve a Pending ticket. Tickets must transition: Pending -> Assigned -> In Progress -> Resolved."
+        });
       }
 
       const actionText = (body.action || "").trim();
@@ -2630,6 +2826,9 @@ async function handleRequest(req, res) {
 
     // 9. Staff: Analytics Summary
     if (pathname === "/api/staff/analytics/summary" && method === "GET") {
+      if (user.role !== "admin" && user.role !== "super_admin") {
+        return sendJson(res, 403, { detail: "Forbidden: Administrator access required" });
+      }
       const total = db.prepare("SELECT COUNT(*) as count FROM reports").get().count;
       const pending = db.prepare("SELECT COUNT(*) as count FROM reports WHERE status = 'pending'").get().count;
       const assigned = db.prepare("SELECT COUNT(*) as count FROM reports WHERE status = 'assigned'").get().count;
@@ -2665,6 +2864,9 @@ async function handleRequest(req, res) {
 
     // 10. Staff: Analytics Heatmap
     if (pathname === "/api/staff/analytics/heatmap" && method === "GET") {
+      if (user.role !== "admin" && user.role !== "super_admin") {
+        return sendJson(res, 403, { detail: "Forbidden: Administrator access required" });
+      }
       const rows = db.prepare(`
         SELECT l.id, l.block, l.room, l.latitude, l.longitude,
                COUNT(r.id) as total,
@@ -2691,6 +2893,9 @@ async function handleRequest(req, res) {
 
     // 11. Staff: Analytics Categories
     if (pathname === "/api/staff/analytics/categories" && method === "GET") {
+      if (user.role !== "admin" && user.role !== "super_admin") {
+        return sendJson(res, 403, { detail: "Forbidden: Administrator access required" });
+      }
       const rows = db.prepare(`
         SELECT category, COUNT(*) as count
         FROM reports
@@ -2710,6 +2915,9 @@ async function handleRequest(req, res) {
 
     // 12. Staff: Staff Directory
     if (pathname === "/api/staff/staff" && method === "GET") {
+      if (user.role !== "admin" && user.role !== "super_admin") {
+        return sendJson(res, 403, { detail: "Forbidden: Administrator access required" });
+      }
       const staff = db.prepare(`
         SELECT u.id, u.name, u.email, u.department,
                COUNT(r.id) as assigned_count

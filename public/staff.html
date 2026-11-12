@@ -245,8 +245,8 @@
       <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 24px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
           <div>
-            <h2 style="font-size: 18px; font-weight: 700;">My Assigned Work Orders</h2>
-            <p style="font-size: 13px; color: var(--muted); margin-top: 4px;">Tickets allocated to your maintenance profile</p>
+            <h2 id="workorders-header-title" style="font-size: 18px; font-weight: 700;">My Assigned Work Orders</h2>
+            <p id="workorders-header-subtitle" style="font-size: 13px; color: var(--muted); margin-top: 4px;">Tickets allocated to your maintenance profile</p>
           </div>
           <button class="btn btn-secondary btn-sm" onclick="fetchTechnicianWorkOrders()">Refresh</button>
         </div>
@@ -366,6 +366,22 @@
       <div style="background: #FEF3C7; border: 1px solid #FCD34D; border-radius: 8px; padding: 12px 14px; font-size: 12px; color: #92400E; display: flex; align-items: center; gap: 8px;">
         <i data-lucide="info" style="width: 16px; height: 16px; flex-shrink: 0;"></i>
         <span><strong>Analytical Guidance (FR-25):</strong> Patterns are leads to investigate, not proven causes.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: STAFF TICKET & RESOLUTION DETAIL -->
+  <div id="modal-staff-detail" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="Incident and resolution details" style="display: none;" onclick="handleStaffModalBackdropClick(event, 'modal-staff-detail')">
+    <div class="modal-card" style="max-width: 680px; width: 95%; max-height: 88vh; overflow-y: auto;">
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 14px;">
+        <div>
+          <div id="detail-modal-badges" style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 4px;"></div>
+          <h3 id="detail-modal-title" style="font-size: 16px; font-weight: 700;">Incident Details</h3>
+        </div>
+        <button id="detail-modal-close-btn" class="btn btn-secondary btn-sm" aria-label="Close staff detail modal" onclick="closeStaffDetailModal()">Close</button>
+      </div>
+      <div id="detail-modal-body" style="display: flex; flex-direction: column; gap: 14px;">
+        <span style="font-size: 12px; color: var(--muted);">Loading ticket details...</span>
       </div>
     </div>
   </div>

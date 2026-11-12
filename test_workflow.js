@@ -1045,7 +1045,7 @@ async function runTests() {
     facReportRes.status === 201 &&
     staffFacEntry &&
     staffFacEntry.reporter_role === "faculty" &&
-    staffFacEntry.reporter_name === "Faculty" &&
+    staffFacEntry.reporter_name === "Prof. Roy" &&
     studentCannotSeeFac,
     "AC9.3",
     "Faculty reports preserve reporter_role='faculty' and reporter_name for staff while isolated from other reporters"
@@ -1120,6 +1120,205 @@ async function runTests() {
     hasFiveHueSteps && uiClean,
     "AC9.6",
     "CSS exposes 5-step single-hue light/dark tokens and UI removes hardcoded heatmap stats & Block 1 fallbacks"
+  );
+
+  // -------------------------------------------------------------
+  // GOAL 10: Resolution Remarks, Tech 2 & Strict Isolation (AC10.1 - AC10.6)
+  // -------------------------------------------------------------
+  console.log("\n--- Goal 10: Resolution Remarks, Tech 2 & Strict Isolation (AC10.1 - AC10.6) ---");
+
+  const ac10Hdrs = { "x-forwarded-for": "10.0.0.101" };
+  const validPng10 = Buffer.from([
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+    0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02
+  ]).toString("base64");
+
+  // AC10.1: Resolve with remarks -> stored in resolutions + returned on admin detail; NEVER in reporter responses
+  const r10_1Create = await request("POST", "/api/reports", {
+    description: "AC10.1 Main breaker tripping repeatedly in Seminar Room",
+    location_id: 2,
+    category: "Electrical",
+    photo_data: validPng10
+  }, facultyToken, ac10Hdrs);
+  const id10_1 = r10_1Create.body?.report?.id;
+  await request("PUT", `/api/staff/reports/${id10_1}`, { status: "assigned", assigned_to: 3 }, adminToken);
+  await request("POST", `/api/staff/reports/${id10_1}/start`, {}, tech1Token);
+  const res10_1 = await request("POST", `/api/staff/reports/${id10_1}/resolve`, {
+    action: "Replaced blown main MCB and balanced circuit load",
+    remarks: "Fuse changed - AC10_SECRET_INTERNAL_REMARK"
+  }, tech1Token);
+
+  const dbRes10_1 = db.prepare("SELECT * FROM resolutions WHERE report_id = ? ORDER BY id DESC LIMIT 1").get(id10_1);
+  const adminDet10_1 = await request("GET", `/api/staff/reports/${id10_1}`, null, adminToken);
+  const repDet10_1 = await request("GET", `/api/reports/${id10_1}`, null, facultyToken);
+  const repMine10_1 = await request("GET", "/api/reports/mine", null, facultyToken);
+  const repLegacy10_1 = await request("GET", "/api/reports", null, facultyToken);
+  const repHist10_1 = await request("GET", `/api/reports/${id10_1}/history`, null, facultyToken);
+  const repNotifs10_1 = await request("GET", "/api/notifications", null, facultyToken);
+
+  function containsRemarksKeyOrText(val) {
+    if (!val || typeof val !== "object") return false;
+    if (Array.isArray(val)) return val.some(containsRemarksKeyOrText);
+    for (const [k, v] of Object.entries(val)) {
+      if (k.toLowerCase().includes("remark")) return true;
+      if (typeof v === "string" && v.includes("AC10_SECRET_INTERNAL_REMARK")) return true;
+      if (v && typeof v === "object" && containsRemarksKeyOrText(v)) return true;
+    }
+    return false;
+  }
+
+  const reporterLeakedRemarks = [
+    r10_1Create.body,
+    repDet10_1.body,
+    repMine10_1.body,
+    repLegacy10_1.body,
+    repHist10_1.body,
+    repNotifs10_1.body
+  ].some(containsRemarksKeyOrText);
+
+  assert(
+    res10_1.status === 200 &&
+    dbRes10_1?.remarks === "Fuse changed - AC10_SECRET_INTERNAL_REMARK" &&
+    adminDet10_1.status === 200 &&
+    adminDet10_1.body.resolution?.action === "Replaced blown main MCB and balanced circuit load" &&
+    adminDet10_1.body.resolution?.remarks === "Fuse changed - AC10_SECRET_INTERNAL_REMARK" &&
+    adminDet10_1.body.resolution?.resolved_by === "Technician 1" &&
+    Boolean(adminDet10_1.body.resolution?.resolved_at) &&
+    Boolean(adminDet10_1.body.report?.assigned_at) &&
+    !reporterLeakedRemarks,
+    "AC10.1",
+    "Resolve with remarks stores in resolutions; admin detail returns action/remarks/resolved_by/resolved_at; reporter endpoints never expose remarks"
+  );
+
+  // AC10.2: Ticket A (tech1) vs Ticket B (tech2) list isolation + exact counts
+  const ticketARes = await request("POST", "/api/reports", {
+    description: "AC10.2 Ticket A HVAC thermostat sensor disconnected",
+    location_id: 3,
+    category: "Equipment",
+    photo_data: validPng10
+  }, facultyToken, ac10Hdrs);
+  const ticketBRes = await request("POST", "/api/reports", {
+    description: "AC10.2 Ticket B Projector network switch unreachable",
+    location_id: 7,
+    category: "IT/Wi-Fi",
+    photo_data: validPng10
+  }, facultyToken, ac10Hdrs);
+  const idA = ticketARes.body?.report?.id;
+  const idB = ticketBRes.body?.report?.id;
+
+  await request("PUT", `/api/staff/reports/${idA}`, { status: "assigned", assigned_to: 3 }, adminToken);
+  await request("PUT", `/api/staff/reports/${idB}`, { status: "assigned", assigned_to: 4 }, adminToken);
+
+  const t1ListRes = await request("GET", "/api/staff/reports", null, tech1Token);
+  const t2ListRes = await request("GET", "/api/staff/reports", null, tech2Token);
+  const t1Ids = (t1ListRes.body.reports || []).map(r => r.id);
+  const t2Ids = (t2ListRes.body.reports || []).map(r => r.id);
+
+  assert(
+    t1ListRes.status === 200 &&
+    t2ListRes.status === 200 &&
+    t1Ids.includes(idA) && !t1Ids.includes(idB) &&
+    t2Ids.includes(idB) && !t2Ids.includes(idA) &&
+    (t1ListRes.body.reports || []).every(r => r.assigned_to === 3) &&
+    (t2ListRes.body.reports || []).every(r => r.assigned_to === 4) &&
+    t1ListRes.body.total === t1Ids.length &&
+    t2ListRes.body.total === t2Ids.length,
+    "AC10.2",
+    "Ticket A assigned to tech1 and Ticket B assigned to tech2 remain strictly isolated with matching counts"
+  );
+
+  // AC10.3: Cross-technician 403 on detail, history, photo, start, resolve (both directions)
+  const t1OnB_detail = await request("GET", `/api/staff/reports/${idB}`, null, tech1Token);
+  const t1OnB_history = await request("GET", `/api/staff/reports/${idB}/history`, null, tech1Token);
+  const t1OnB_photo = await request("GET", `/api/staff/reports/${idB}/photo`, null, tech1Token);
+  const t1OnB_start = await request("POST", `/api/staff/reports/${idB}/start`, {}, tech1Token);
+  const t1OnB_resolve = await request("POST", `/api/staff/reports/${idB}/resolve`, { action: "Unauthorized" }, tech1Token);
+
+  const t2OnA_detail = await request("GET", `/api/staff/reports/${idA}`, null, tech2Token);
+  const t2OnA_history = await request("GET", `/api/staff/reports/${idA}/history`, null, tech2Token);
+  const t2OnA_photo = await request("GET", `/api/staff/reports/${idA}/photo`, null, tech2Token);
+  const t2OnA_start = await request("POST", `/api/staff/reports/${idA}/start`, {}, tech2Token);
+  const t2OnA_resolve = await request("POST", `/api/staff/reports/${idA}/resolve`, { action: "Unauthorized" }, tech2Token);
+
+  assert(
+    [t1OnB_detail, t1OnB_history, t1OnB_photo, t1OnB_start, t1OnB_resolve].every(r => r.status === 403) &&
+    [t2OnA_detail, t2OnA_history, t2OnA_photo, t2OnA_start, t2OnA_resolve].every(r => r.status === 403),
+    "AC10.3",
+    "Cross-technician requests return 403 on detail, history, photo, start, and resolve in both directions"
+  );
+
+  // AC10.4: Reassigning Ticket A from tech1 to tech2 updates lists, notifications, and status_history
+  const histBeforeReassign = db.prepare("SELECT COUNT(*) as c FROM status_history WHERE report_id = ?").get(idA).c;
+  const reassignRes = await request("PUT", `/api/staff/reports/${idA}`, { assigned_to: 4 }, adminToken);
+  const histAfterReassign = db.prepare("SELECT COUNT(*) as c FROM status_history WHERE report_id = ?").get(idA).c;
+  const notifTech2Reassign = db.prepare("SELECT * FROM notifications WHERE report_id = ? AND user_id = 4").all(idA);
+
+  const t1AfterReassign = await request("GET", "/api/staff/reports", null, tech1Token);
+  const t2AfterReassign = await request("GET", "/api/staff/reports", null, tech2Token);
+  const t1NotifsAfter = await request("GET", "/api/staff/notifications", null, tech1Token);
+  const t2NotifsAfter = await request("GET", "/api/staff/notifications", null, tech2Token);
+
+  assert(
+    reassignRes.status === 200 &&
+    reassignRes.body.assigned_to === 4 &&
+    !(t1AfterReassign.body.reports || []).some(r => r.id === idA) &&
+    (t2AfterReassign.body.reports || []).some(r => r.id === idA) &&
+    histAfterReassign > histBeforeReassign &&
+    notifTech2Reassign.length > 0 &&
+    !(t1NotifsAfter.body.notifications || []).some(n => n.report_id === idA) &&
+    (t2NotifsAfter.body.notifications || []).some(n => n.report_id === idA),
+    "AC10.4",
+    "Reassigning A from tech1 to tech2 moves ticket & notifications and logs status_history + notification"
+  );
+
+  // AC10.5: Technician receives 403 on campus-wide & admin endpoints; Admin receives 200
+  const techAdminEndpoints = [
+    ["GET", "/api/staff/blocks/summary"],
+    ["GET", "/api/staff/blocks/Block%201/summary"],
+    ["GET", "/api/staff/analytics/summary"],
+    ["GET", "/api/staff/users"],
+    ["GET", "/api/staff/staff"],
+    ["GET", "/api/staff/corrections/export"]
+  ];
+  const t1AdminResults = [];
+  const t2AdminResults = [];
+  const admResults = [];
+  for (const [m, ep] of techAdminEndpoints) {
+    t1AdminResults.push(await request(m, ep, null, tech1Token));
+    t2AdminResults.push(await request(m, ep, null, tech2Token));
+    admResults.push(await request(m, ep, null, adminToken));
+  }
+  const t1Prio403 = await request("PATCH", `/api/staff/reports/${idB}/priority`, { priority: "low" }, tech1Token);
+  const t2Prio403 = await request("PATCH", `/api/staff/reports/${idB}/priority`, { priority: "low" }, tech2Token);
+
+  assert(
+    t1AdminResults.every(r => r.status === 403) &&
+    t2AdminResults.every(r => r.status === 403) &&
+    t1Prio403.status === 403 && t2Prio403.status === 403 &&
+    admResults.every(r => r.status === 200),
+    "AC10.5",
+    "Technicians get 403 on blocks/summary, analytics/summary, users/staff, corrections CSV, and priority override; Admin gets 200"
+  );
+
+  // AC10.6: Unassigned tickets never appear in any technician list or search
+  const unassignedRes = await request("POST", "/api/reports", {
+    description: "AC10_6_UNASSIGNED_UNIQUE_TOKEN loose ceiling tile",
+    location_id: 1,
+    category: "Safety"
+  }, facultyToken, ac10Hdrs);
+  const unassignedId = unassignedRes.body?.report?.id;
+  const t1UnassignedList = await request("GET", "/api/staff/reports?search=AC10_6_UNASSIGNED_UNIQUE_TOKEN", null, tech1Token);
+  const t2UnassignedList = await request("GET", "/api/staff/reports?search=AC10_6_UNASSIGNED_UNIQUE_TOKEN", null, tech2Token);
+  const adminUnassignedList = await request("GET", "/api/staff/reports?search=AC10_6_UNASSIGNED_UNIQUE_TOKEN", null, adminToken);
+
+  assert(
+    unassignedRes.status === 201 &&
+    (t1UnassignedList.body.reports || []).length === 0 &&
+    (t2UnassignedList.body.reports || []).length === 0 &&
+    (adminUnassignedList.body.reports || []).some(r => r.id === unassignedId),
+    "AC10.6",
+    "Unassigned tickets never appear in tech1 or tech2 lists or search results"
   );
 
   // -------------------------------------------------------------
